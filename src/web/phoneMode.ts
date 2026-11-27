@@ -4,8 +4,9 @@ const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 
 // What dismisses the drawer: the whole box row (matching its own click handler,
 // which opens the box from anywhere on the row — not just the name button), the
-// Host Shell, and every sidebar control that opens an overlay or leaves the
-// workspace.
+// Host Shell, an agent row under either (a tap jumps to that pane, so the stage
+// is what the operator wants to see next), and every sidebar control that opens
+// an overlay or leaves the workspace.
 //
 // Controls that operate INSIDE the drawer are deliberately absent — the search
 // field, the group headers, the fleet checkboxes, and `#fleet-toggle`, which
@@ -26,6 +27,7 @@ const SIDEBAR_COLLAPSED_KEY = 'tmuxifier.sidebarCollapsed';
 export const CLOSES_DRAWER = [
   '.box',
   '.local-shell',
+  '.box-agent',
   '#home',
   '#settings',
   '#logout',

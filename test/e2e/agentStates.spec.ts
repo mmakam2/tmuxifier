@@ -2,9 +2,10 @@ import { test, expect, type Page, type Request } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildAgentPanes, resetAgentPanes, writePaneMarker, type AgentPaneLayout } from './agentPaneBox';
 
 // The four-state agent model end to end: hook marker files on the box →
-// server probe → health series → every client surface (sidebar badge,
+// server probe → health series → every client surface (sidebar agent rows,
 // attention strip, standby agents board, pane-header chip, session picker
 // chip) → the seen acknowledgement that turns `done` into `idle`.
 //
@@ -17,7 +18,7 @@ import path from 'node:path';
 // Two fixture facts shape the assertions:
 //  - All three seeded boxes (localhost, db-primary, untagged-worker) are ssh
 //    aliases of the SAME fixture and tmux server, so every marker is seen by
-//    all three: the strip counts 3 sessions per marker, and per-box
+//    all three: the strip counts 3 panes per marker, and per-box
 //    assertions are scoped to the localhost row / card.
 //  - The client reads /api/status and /api/health/series on a 30 s interval
 //    (main.ts POLL_MS; the server's own 2 s poll only freshens the cache).
@@ -27,10 +28,10 @@ import path from 'node:path';
 //    /api/health/series responses instead, never on fixed sleeps.
 //  - The e2e server runs on the operator's host, and its Host Shell sampler
 //    (localAgent.js) reads the host's REAL tmux server and ~/.tmuxifier-agent.
-//    The strip counts Host Shell sessions too, so whatever the operator's own
+//    The strip counts Host Shell panes too, so whatever the operator's own
 //    Claude is doing right now is in the totals. stripReads() adds the Host
-//    Shell row's per-state count (read from its badge title in the same DOM
-//    pass as the strip) to the fixture's expected count.
+//    Shell's per-state row count (read in the same DOM pass as the strip) to
+//    the fixture's expected count.
 
 const cfg = process.env.E2E_SSH_CONFIG!;
 const host = process.env.E2E_BOX_HOST!;
@@ -57,19 +58,18 @@ async function login(page: Page) {
   await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
 }
 
-// The strip segment's text next to the text it should have: `boxSessions`
-// fixture sessions plus however many Host Shell sessions are in `state`, both
+// The strip segment's text next to the text it should have: `boxPanes`
+// fixture panes plus however many Host Shell agent rows are in `state`, both
 // read in one evaluate, so they always come from the same repaint.
-async function stripReads(page: Page, state: string, boxSessions: number): Promise<string> {
+async function stripReads(page: Page, state: string, boxPanes: number): Promise<string> {
   return page.evaluate(([st, n0]) => {
     const seg = document.querySelector(`#agent-strip .agent-strip-seg[data-state="${st}"]`);
-    const title = document.querySelector('.local-shell [data-agent-badge]')?.getAttribute('title') ?? '';
-    const local = [...title.matchAll(/(?:^|· )[A-Za-z0-9_-]+: (blocked|done|working|idle)/g)].filter((m) => m[1] === st).length;
+    const local = document.querySelectorAll(`li.box-agents[data-agents-for="__local__"] .box-agent[data-state="${st}"]`).length;
     const n = (n0 as number) + local;
     const want = n === 0 ? null : st === 'blocked' ? `${n} need${n === 1 ? 's' : ''} you` : `${n} ${st}`;
     const got = seg ? seg.textContent : null;
     return got === want ? 'ok' : `strip ${st}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
-  }, [state, boxSessions] as const);
+  }, [state, boxPanes] as const);
 }
 
 // Reload until `check` passes: the boot poll reads the server's current cache,
@@ -82,7 +82,7 @@ async function reloadUntil(page: Page, check: () => Promise<void>, timeout = 300
   }).toPass({ timeout });
 }
 
-test('agent states reach badge, strip, board, chips; a seen done turns idle', async ({ page }) => {
+test('agent states reach rows, strip, board, chips; a seen done turns idle', async ({ page }) => {
   test.setTimeout(300000);
 
   // Count the client's health polls so the live-poll checks can wait on
@@ -95,7 +95,7 @@ test('agent states reach badge, strip, board, chips; a seen done turns idle', as
   };
 
   // Every seen ack the page sends, with the ts it carried.
-  const seenPosts: { session: string; ts: number }[] = [];
+  const seenPosts: { pane: string; ts: number }[] = [];
   page.on('request', (r: Request) => {
     if (r.method() === 'POST' && /\/agent-seen$/.test(r.url())) seenPosts.push(r.postDataJSON());
   });
@@ -108,6 +108,8 @@ test('agent states reach badge, strip, board, chips; a seen done turns idle', as
     onBox(`tmux new-session -d -s '${session2}' bash -c 'exec -a claude sleep 600'`);
     expect(onBox(`tmux display-message -p -t '=${session}:' '#{pane_current_command}'`).trim()).toBe('claude');
     expect(onBox(`tmux display-message -p -t '=${session2}:' '#{pane_current_command}'`).trim()).toBe('claude');
+    const pane1 = onBox(`tmux display-message -p -t '=${session}:' '#{pane_id}'`).trim();
+    const pane2 = onBox(`tmux display-message -p -t '=${session2}:' '#{pane_id}'`).trim();
 
     const t0 = now();
     writeMarker(session, 'blocked', t0, 'permission');
@@ -117,15 +119,15 @@ test('agent states reach badge, strip, board, chips; a seen done turns idle', as
     const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
     const boxId = (await row.getAttribute('data-id'))!;
     expect(boxId).toBeTruthy();
-    const badge = row.locator('.badge-agent-blocked');
+    const agentRow = (pane: string) => page.locator(`li.box-agents[data-agents-for="${boxId}"] .box-agent[data-pane="${pane}"]`);
 
-    // ── Sidebar badge: worst state, ×N for several stateful sessions, title
-    // naming every session.
+    // ── Sidebar rows: one per agent pane, each with its own state chip. A
+    // session-wide marker speaks for the agent pane of its session.
     await reloadUntil(page, async () => {
-      await expect(badge).toHaveText('blocked ×2', { timeout: 5000 });
+      await expect(agentRow(pane1)).toHaveAttribute('data-state', 'blocked', { timeout: 5000 });
     });
-    await expect(badge).toHaveAttribute('title', new RegExp(`${session}: blocked · permission`));
-    await expect(badge).toHaveAttribute('title', new RegExp(`${session2}: done`));
+    await expect(agentRow(pane1).locator('.badge-agent-blocked')).toHaveText('blocked · permission');
+    await expect(agentRow(pane2)).toHaveAttribute('data-state', 'done');
 
     // ── Attention strip: sessions counted across all three alias boxes.
     const strip = page.locator('#agent-strip');
@@ -206,14 +208,14 @@ test('agent states reach badge, strip, board, chips; a seen done turns idle', as
     // keeps this page's once-per-ts memory intact.
     await expect(pane.locator('.pane-header .pane-chip.chip-agent-done')).toHaveText('done', { timeout: 45000 });
     await expect.poll(() => seenPosts.filter((p) => p.ts === t1).length, { timeout: 10000 }).toBe(1);
-    expect(seenPosts.filter((p) => p.ts === t1)[0]).toEqual({ session, ts: t1 });
+    expect(seenPosts.filter((p) => p.ts === t1)[0]).toEqual({ pane: pane1, ts: t1 });
 
     // ── Keyboard focus survives a repaint: rides the same polls.
     await seg('done').focus();
     await morePolls(2);
     await expect(pane.locator('.pane-header .pane-chip.chip-agent-done')).toHaveText('done'); // still unacked server-side
     expect(seenPosts.filter((p) => p.ts === t1).length).toBe(1);
-    expect(seenPosts.filter((p) => p.session === session2)).toEqual([]); // not docked → never acked
+    expect(seenPosts.filter((p) => p.pane === pane2)).toEqual([]); // not docked → never acked
     expect(await page.evaluate(() => {
       const a = document.activeElement as HTMLElement | null;
       return a?.classList.contains('agent-strip-seg') ? a.dataset.state : null;
@@ -243,13 +245,13 @@ test('agent states reach badge, strip, board, chips; a seen done turns idle', as
     });
     const res = await acked;
     expect(res.status()).toBe(200);
-    expect(res.request().postDataJSON()).toEqual({ session, ts: t2 });
+    expect(res.request().postDataJSON()).toEqual({ pane: pane1, ts: t2 });
     await expect(pane.locator('.pane-header .pane-chip.chip-agent-idle')).toHaveText('idle', { timeout: 45000 });
     expect(seenPosts.filter((p) => p.ts === t2).length).toBe(1);
     // Only localhost acknowledged; its two aliases still read done.
-    // localhost: session2 still done (worst), the acked session idle — both count.
-    await expect(row.locator('[data-agent-badge]')).toHaveText('done ×2');
-    await expect(row.locator('[data-agent-badge]')).toHaveAttribute('title', new RegExp(`${session}: idle`));
+    // localhost: session2's pane still done, the acked pane idle — both count.
+    await expect(agentRow(pane2)).toHaveAttribute('data-state', 'done');
+    await expect(agentRow(pane1)).toHaveAttribute('data-state', 'idle');
     await expect.poll(() => stripReads(page, 'idle', 1)).toBe('ok');
     await expect.poll(() => stripReads(page, 'done', 5)).toBe('ok');
   } finally {
@@ -259,6 +261,100 @@ test('agent states reach badge, strip, board, chips; a seen done turns idle', as
     // Back to a login shell, as a fresh session starts. A bare respawn-pane
     // would re-run the pane's LAST command — the fake claude set above.
     try { onBox(`tmux respawn-pane -k -t '=${session}:' "$(tmux show-options -gv default-shell)" -l`); } catch { /* no session */ }
+  }
+});
+
+// The pane is the unit (spec 2026-11-26 §7.1, §4.5, §7.3): one sidebar row per
+// agent pane under its box, named for its window (`.paneIndex` only where a
+// window holds two agents), no box badge; the strip counts panes; looking at a
+// window acknowledges only the agents in it; a row click jumps to its pane.
+test('sidebar: one row per agent pane, per-pane seen, and a row click jumps to the pane', async ({ page }) => {
+  test.setTimeout(240000);
+  let layout: AgentPaneLayout | null = null;
+  const seenPosts: { pane: string; ts: number }[] = [];
+  const windowPosts: Record<string, unknown>[] = [];
+  page.on('request', (r: Request) => {
+    if (r.method() !== 'POST') return;
+    if (/\/agent-seen$/.test(r.url())) seenPosts.push(r.postDataJSON());
+    if (/\/api\/boxes\/[^/]+\/window$/.test(r.url())) windowPosts.push(r.postDataJSON());
+  });
+  let healthPolls = 0;
+  page.on('response', (r) => { if (/\/api\/health\/series(\?|$)/.test(r.url())) healthPolls++; });
+  const morePolls = async (n: number) => {
+    const target = healthPolls + n;
+    await expect.poll(() => healthPolls, { timeout: 35000 * n, intervals: [500] }).toBeGreaterThanOrEqual(target);
+  };
+  try {
+    layout = buildAgentPanes(session);
+    const { one, twoA, twoB } = layout;
+    const t0 = now();
+    writePaneMarker(session, one.pane, 'ready', t0, 'stop'); // ready/stop = done until seen
+    writePaneMarker(session, twoA.pane, 'blocked', t0, 'permission');
+    writePaneMarker(session, twoB.pane, 'ready', t0 + 1, 'stop');
+
+    await login(page);
+    const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
+    const boxId = (await row.getAttribute('data-id'))!;
+    const group = page.locator(`li.box-agents[data-agents-for="${boxId}"]`);
+    const rows = group.locator('button.box-agent');
+    const agentRow = (pane: string) => group.locator(`button.box-agent[data-pane="${pane}"]`);
+
+    // ── 1. Three rows directly under the box, named and ordered by window and
+    // pane, each with its own chip; nothing agent-shaped left in the badges.
+    await reloadUntil(page, async () => { await expect(rows).toHaveCount(3, { timeout: 5000 }); });
+    await expect(rows.locator('.box-agent-name')).toHaveText([one.name, twoA.name, twoB.name]);
+    expect(await rows.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.pane))).toEqual([one.pane, twoA.pane, twoB.pane]);
+    expect(await row.evaluate((li) => {
+      const next = li.nextElementSibling as HTMLElement | null;
+      return next?.classList.contains('box-agents') ? next.dataset.agentsFor : null;
+    })).toBe(boxId);
+    await expect(agentRow(one.pane)).toHaveAttribute('data-state', 'done');
+    await expect(agentRow(twoA.pane)).toHaveAttribute('data-state', 'blocked');
+    await expect(agentRow(twoA.pane).locator('.badge.badge-agent-blocked')).toHaveText('blocked · permission');
+    await expect(agentRow(twoB.pane).locator('.badge.badge-agent-done')).toHaveText('done');
+    await expect(row.locator('.box-badges [class*="badge-agent-"]')).toHaveCount(0);
+
+    // ── 2. The strip counts panes (all three alias boxes see this tmux), and a
+    // segment filter keeps the box and its rows.
+    const seg = (st: string) => page.locator(`#agent-strip .agent-strip-seg[data-state="${st}"]`);
+    await expect.poll(() => stripReads(page, 'blocked', 3)).toBe('ok');
+    await expect.poll(() => stripReads(page, 'done', 6)).toBe('ok');
+    await seg('blocked').click();
+    await expect(seg('blocked')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#boxes .box .name', { hasText: /^localhost$/ })).toBeVisible();
+    await expect(rows).toHaveCount(3);
+    await seg('blocked').click();
+    await expect(seg('blocked')).toHaveAttribute('aria-pressed', 'false');
+
+    // ── 3. Dock the box on window 1: its done is acknowledged once, with the
+    // pane, and the row turns idle; window 2's done is never acknowledged.
+    await page.bringToFront();
+    expect(await page.evaluate(() => document.hasFocus())).toBe(true);
+    await page.locator('.box .name', { hasText: /^localhost$/ }).click();
+    const pane = page.locator('.stage-pane').first();
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_ONE', { timeout: 15000 });
+    await expect.poll(() => seenPosts.filter((p) => p.pane === one.pane).length, { timeout: 15000 }).toBe(1);
+    expect(seenPosts.filter((p) => p.pane === one.pane)).toEqual([{ pane: one.pane, ts: t0 }]);
+    await expect(agentRow(one.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
+    await morePolls(1);
+    expect(seenPosts.filter((p) => p.pane === one.pane)).toHaveLength(1);
+    expect(seenPosts.filter((p) => p.pane === twoB.pane || p.pane === twoA.pane)).toEqual([]);
+    await expect(agentRow(twoB.pane)).toHaveAttribute('data-state', 'done');
+
+    // ── 4. A row click jumps: the window route gets session, window and pane;
+    // the terminal shows window 2; its done is then acknowledged.
+    await agentRow(twoB.pane).click();
+    await expect.poll(() => windowPosts.length, { timeout: 10000 }).toBe(1);
+    expect(windowPosts[0]).toEqual({ session, windowId: twoB.windowId, paneId: twoB.pane });
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_B', { timeout: 15000 });
+    await expect(pane.locator('.xterm-rows')).not.toContainText('AGENT_WINDOW_ONE');
+    expect(onBox(`tmux display-message -p -t '=${session}:' '#{window_id} #{pane_id}'`).trim()).toBe(`${twoB.windowId} ${twoB.pane}`);
+    await expect.poll(() => seenPosts.filter((p) => p.pane === twoB.pane).length, { timeout: 45000 }).toBe(1);
+    expect(seenPosts.filter((p) => p.pane === twoB.pane)).toEqual([{ pane: twoB.pane, ts: t0 + 1 }]);
+    await expect(agentRow(twoB.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
+    expect(seenPosts.filter((p) => p.pane === twoA.pane)).toEqual([]); // blocked is not done
+  } finally {
+    resetAgentPanes(layout, session);
   }
 });
 

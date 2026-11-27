@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { buildAgentPanes, now, onBox, resetAgentPanes, writePaneMarker, type AgentPaneLayout } from './agentPaneBox';
 
 // Phone mode end to end: the drawer shell, the single-pane stage with its
 // top-bar switcher, and the touch key bar reaching the pty. Runs under the
@@ -407,4 +408,50 @@ test('the agent switcher is off on a phone', async ({ page }) => {
   await page.keyboard.up('Control');
   expect(await page.evaluate(() => (window as unknown as { __swAttached: boolean }).__swAttached)).toBe(false);
   await expect(page.locator('#agent-switcher')).toHaveCount(0);
+});
+
+// The drawer carries the same agent rows as the desktop sidebar (spec
+// 2026-11-26 §7.1), and a tap on one jumps to its pane and closes the drawer,
+// like a tap on a box row.
+test('drawer: agent rows under a box; a tap jumps to the pane and closes the drawer', async ({ page }) => {
+  test.setTimeout(120000);
+  const session = process.env.E2E_BOX_SESSION!;
+  let layout: AgentPaneLayout | null = null;
+  const windowPosts: Record<string, unknown>[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && /\/api\/boxes\/[^/]+\/window$/.test(r.url())) windowPosts.push(r.postDataJSON());
+  });
+  try {
+    layout = buildAgentPanes(session);
+    const { one, twoA, twoB } = layout;
+    writePaneMarker(session, one.pane, 'working', now(), 'prompt');
+    writePaneMarker(session, twoA.pane, 'working', now(), 'prompt');
+    writePaneMarker(session, twoB.pane, 'blocked', now(), 'question');
+
+    await login(page);
+    const boxes = await (await page.request.get('/api/boxes')).json();
+    const boxId = boxes.find((b: { label: string }) => b.label === 'localhost').id as string;
+    const rows = page.locator(`li.box-agents[data-agents-for="${boxId}"] button.box-agent`);
+    // Rows arrive with the health series; a reload re-runs the boot poll.
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator('#phone-menu')).toBeVisible({ timeout: 10000 });
+      await expect(rows).toHaveCount(3, { timeout: 5000 });
+    }).toPass({ timeout: 30000 });
+
+    await openDrawer(page);
+    await expect(rows.locator('.box-agent-name')).toHaveText([one.name, twoA.name, twoB.name]);
+    const target = page.locator(`li.box-agents[data-agents-for="${boxId}"] button.box-agent[data-pane="${twoB.pane}"]`);
+    await expect(target).toBeVisible();
+    await target.tap();
+    await expect(page.locator('.layout')).not.toHaveClass(/drawer-open/);
+    const pane = page.locator('.stage-pane');
+    await expect(pane).toHaveCount(1);
+    await expect.poll(() => windowPosts.length, { timeout: 10000 }).toBe(1);
+    expect(windowPosts[0]).toEqual({ session, windowId: twoB.windowId, paneId: twoB.pane });
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_B', { timeout: 15000 });
+    expect(onBox(`tmux display-message -p -t '=${session}:' '#{window_id} #{pane_id}'`).trim()).toBe(`${twoB.windowId} ${twoB.pane}`);
+  } finally {
+    resetAgentPanes(layout, session);
+  }
 });

@@ -26,3 +26,7 @@ test('the Messages key closes the phone drawer like the Events key', () => {
   expect(selectors).toContain('#fleet-jobs');
   expect(selectors).toContain('#messages');
 });
+
+test('an agent row under a box closes the phone drawer: a tap on it jumps to the pane', () => {
+  expect(CLOSES_DRAWER.split(',').map((x) => x.trim())).toContain('.box-agent');
+});

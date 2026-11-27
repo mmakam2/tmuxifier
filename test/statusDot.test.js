@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import {
   dotClassFor, dotTitleFor, classifyError, metaSegmentsFor, CPU_ICON, MEM_ICON, DISK_ICON,
-  cpuLoadPct, cpuLevel, agentBadgeFor,
+  cpuLoadPct, cpuLevel,
 } from '../src/web/statusDot.ts';
 
 // Local plain-text join of the segments (value + icon, ' · ' separated) — the
@@ -219,12 +219,4 @@ test('needsAuth + mismatch: the login prompt wins — auth dot, auth title, need
   expect(dotTitleFor(st)).toMatch(/reconnect/i);
   expect(metaLine(st)).toMatch(/login/i);
   expect(metaLine(st)).not.toMatch(/mismatch/i);
-});
-
-test('agentBadgeFor: worst state wins, count and title list the sessions, absence is null', () => {
-  const agents = { web: { present: true, attached: false, state: 'done', ts: 1 }, 'web-2': { present: true, attached: false, state: 'blocked', cause: 'question', ts: 2 } };
-  expect(agentBadgeFor([{ t: 1, up: true, agents }])).toEqual({ text: 'blocked', cls: 'badge-agent-blocked', count: 2, title: 'web-2: blocked · question · web: done' });
-  expect(agentBadgeFor([{ t: 1, up: true, agents: { web: { present: true, attached: false, state: 'working', ts: 1 } } }])).toMatchObject({ text: 'working', sprite: true, count: 1 });
-  expect(agentBadgeFor([{ t: 1, up: true, agents: {} }])).toBeNull();
-  expect(agentBadgeFor(undefined)).toBeNull();
 });

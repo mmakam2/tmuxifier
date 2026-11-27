@@ -429,7 +429,8 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .layout.sidebar-collapsed .search-wrap,
 .layout.sidebar-collapsed .agent-strip,
 .layout.sidebar-collapsed .boxes,
-.layout.sidebar-collapsed .local-shell { display: none; }
+.layout.sidebar-collapsed .local-shell,
+.layout.sidebar-collapsed .local-agents { display: none; }
 .actions { display: flex; flex-direction: column; gap: 6px; }
 /* "+ Add box" joins the function-key family. */
 .actions button {
@@ -579,7 +580,7 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .badge { font-family: var(--face); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.6; padding: 0 6px; border-radius: 4px; border: 1px solid var(--border); white-space: nowrap; color: var(--muted); background: var(--panel-2); }
 .badge-info { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .badge-warn { color: var(--commit); border-color: color-mix(in srgb, var(--commit) 45%, transparent); background: color-mix(in srgb, var(--commit) 10%, transparent); }
-/* Agent state beside the box label — same recipes as the pane chip
+/* Agent state on each agent row under a box — same recipes as the pane chip
    (chip-agent-*), one per state of the four-state model: LED red = blocked on
    a permission or question (the operator must answer), orange = a finished
    turn waiting on the operator (The Orange Means You Rule), amber = working
@@ -683,6 +684,30 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 .local-shell .local-edit { font-size: 14px; }
 .local-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--key-hi); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), inset 0 1px 2px rgba(0, 0, 0, 0.6); }
 .local-dot.green { background: var(--ok); box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.25), 0 0 6px color-mix(in srgb, var(--ok) 50%, transparent); }
+/* Agent rows (spec 2026-11-26 §7.1, layout B): one key per agent pane, hung
+   under its box behind a 1px bezel-seam guide that drops from the box lamp's
+   centre (row border 1 + padding 8 + half the 9px lamp). Name left in the
+   readout voice, the state chip right; each row has its own hover and focus
+   ring, and the box row above keeps its own. Flat legends, nothing extrudes:
+   a child of a key, not a key of its own. */
+.box-agents { list-style: none; margin: 0 0 4px 13px; padding: 0; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 1px; }
+.box-agent {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-width: 0; padding: 3px 8px 3px 12px; margin: 0;
+  border: 0; border-radius: 0 4px 4px 0; background: transparent; cursor: pointer; text-align: left;
+  font-family: var(--face); font-size: 11px; line-height: 1.5; color: var(--muted);
+  transition: background 0.12s, color 0.12s;
+}
+.box-agent:hover { background: var(--panel-2); color: var(--text); }
+.box-agent:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
+.box-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.box-agent .badge { flex: none; }
+@media (prefers-reduced-motion: reduce) { .box-agent { transition: none; } }
+/* The Host Shell's rows hang under its row the same way. It is pinned to the
+   sidebar's foot, so a long list scrolls inside its own strip. */
+.local-agents { list-style: none; margin: 0; padding: 2px 0 0; flex: none; max-height: 30vh; overflow-y: auto; }
+.local-agents:empty { display: none; }
+.local-agents .box-agents { margin-bottom: 2px; }
 
 /* --- Service panels (modals) ---------------------------------------------- */
 .modal-backdrop { position: fixed; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; z-index: 55; }
@@ -2470,6 +2495,9 @@ button.empty-kbd:hover { color: var(--text); }
   /* Touch targets: box rows and dashboard tiles reach 40px minimum; the
      sparkline (64x16 on desktop) grows into a tappable strip. */
   .box { min-height: 40px; }
+  /* An agent row is a tap target too: shorter than a box row (it is the
+     child), still a comfortable thumb. */
+  .box-agent { min-height: 32px; }
   .spark { padding: 4px 0; }
   .spark-svg { width: 84px; height: 20px; }
   /* iOS zooms the page when a focused input's font is under 16px; xterm's

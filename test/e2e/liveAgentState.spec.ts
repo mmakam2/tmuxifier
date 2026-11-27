@@ -43,12 +43,15 @@ test('a marker change reaches the open page in seconds, without a reload or a fu
   try {
     onBox(`tmux kill-session -t '=${session}' 2>/dev/null; tmux new-session -d -s '${session}' bash -c 'exec -a claude sleep 600'`);
     expect(onBox(`tmux display-message -p -t '=${session}:' '#{pane_current_command}'`).trim()).toBe('claude');
+    const pane = onBox(`tmux display-message -p -t '=${session}:' '#{pane_id}'`).trim();
     writeMarker('working', now(), 'prompt');
 
     await login(page);
     const row = page.locator('.box', { has: page.locator('.name', { hasText: /^localhost$/ }) }).first();
-    const badge = row.locator('.badge[class*="badge-agent-"]');
-    const titled = (re: RegExp, timeout: number) => expect(badge).toHaveAttribute('title', re, { timeout });
+    const boxId = (await row.getAttribute('data-id'))!;
+    // The session-wide marker speaks for the session's agent pane: its sidebar row.
+    const agentRow = page.locator(`li.box-agents[data-agents-for="${boxId}"] .box-agent[data-pane="${pane}"]`);
+    const titled = (re: RegExp, timeout: number) => expect(agentRow).toHaveAttribute('title', re, { timeout });
 
     // Arrival of the starting state is forced with reloads, as in
     // agentStates.spec.ts. The LAST reload also restarts the page's 30 s poll
@@ -56,7 +59,7 @@ test('a marker change reaches the open page in seconds, without a reload or a fu
     await expect(async () => {
       await page.reload();
       await expect(page.locator('.box .name', { hasText: 'localhost' })).toBeVisible({ timeout: 10000 });
-      await titled(new RegExp(`${session}: working`), 4000);
+      await titled(new RegExp(`: working$`), 4000);
     }).toPass({ timeout: 40000 });
     await page.waitForTimeout(1500); // let the boot's own fetches finish
 
@@ -70,7 +73,7 @@ test('a marker change reaches the open page in seconds, without a reload or a fu
 
     // ── working -> blocked
     writeMarker('blocked', now(), 'permission');
-    await titled(new RegExp(`${session}: blocked · permission`), 10000);
+    await titled(new RegExp(`: blocked · permission$`), 10000);
     // It was the nudge, not the interval: no whole-fleet series fetch happened,
     // and at least one single-box fetch did.
     expect(fullPolls).toBe(0);
@@ -78,12 +81,12 @@ test('a marker change reaches the open page in seconds, without a reload or a fu
 
     // ── blocked -> done, the same way
     writeMarker('ready', now() + 1, 'stop');
-    await titled(new RegExp(`${session}: done`), 10000);
+    await titled(new RegExp(`: done$`), 10000);
     expect(fullPolls).toBe(0);
 
     // ── and a change that raises no health event at all (-> working)
     writeMarker('working', now() + 2, 'prompt');
-    await titled(new RegExp(`${session}: working`), 10000);
+    await titled(new RegExp(`: working$`), 10000);
     expect(fullPolls).toBe(0);
   } finally {
     try { fs.rmSync(path.join(markerDir, session), { force: true }); } catch { /* gone */ }

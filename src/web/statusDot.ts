@@ -1,5 +1,4 @@
-import type { Status, BoxMetrics, Sample, AgentState } from './api';
-import { worstAgent, latestAgents, agentChipText } from './agentState';
+import type { Status, BoxMetrics } from './api';
 
 type DotClass = 'gray' | 'green' | 'amber' | 'red' | 'auth';
 
@@ -68,29 +67,6 @@ export function dotTitleFor(st: Status | undefined): string {
 export function cpuLoadPct(m: BoxMetrics | undefined): number | undefined {
   if (!m || m.load1 == null || !m.cpus) return undefined;
   return Math.round((m.load1 / m.cpus) * 100);
-}
-
-// Sidebar agent badge (the third agent-state surface, after the pane chip and
-// the standby fleet strip): the latest health sample's per-session states
-// folded to the worst one (agentState.ts), or null when no session has a
-// state. Only the NEWEST sample counts — an older sample's state is history,
-// and a box with no hook-sourced state renders nothing by design: under the
-// hook-only rule that silence means "rerun setup", not "invent a state".
-// `count` is how many sessions have a state; `title` lists them all.
-export interface AgentBadge { text: AgentState; cls: string; sprite?: boolean; count: number; title: string }
-export function agentBadgeFor(samples: Sample[] | undefined): AgentBadge | null {
-  const w = worstAgent(latestAgents(samples));
-  if (!w) return null;
-  const badge: AgentBadge = {
-    text: w.state,
-    cls: `badge-agent-${w.state}`,
-    count: w.count,
-    title: w.sessions.map((s) => `${s.session}: ${agentChipText(s.state, s.cause)}`).join(' · '),
-  };
-  // Clawd rides the working state only: motion means "agent busy", and its
-  // absence elsewhere keeps stillness meaning "nothing running right now".
-  if (w.state === 'working') badge.sprite = true;
-  return badge;
 }
 
 // Color tier for a meta segment. 'auth' is not a severity — it's the dedicated
