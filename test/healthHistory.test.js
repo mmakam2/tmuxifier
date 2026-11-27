@@ -652,7 +652,7 @@ test('a watermark loaded from seenStore.load() yields idle on the FIRST record o
 test('a removed box drops its seen entry', () => {
   const store = memSeenStore({ b1: { '%1': 100 }, b2: { '%1': 5 } });
   const h = createHealthHistory({ seenStore: store });
-  h.record({ b2: paneStatus([]) }, [{ id: 'b2', host: 'h' }]);
+  h.record({ b2: one(null) }, [{ id: 'b2', host: 'h' }]);   // b2 still lists %1
   expect(store.data).toEqual({ b2: { '%1': 5 } });
 });
 
@@ -977,4 +977,101 @@ test('a marker gap bridged by recordAgents still edges correctly when the agent 
   h.recordAgents(RT_BOX, pair('claude'));
   h.recordAgents(RT_BOX, pair('zsh'));
   expect(h.getEvents().events.map((e) => e.kind)).toEqual(['agent-blocked']);
+});
+
+// --- seen, per pane ----------------------------------------------------------
+
+// Two claude panes in one session, spoken for by one session-wide marker: a
+// box whose setup has not been rerun.
+const twoPanesOneMarker = (ts = 200) => fromProbe([
+  'web:1:0:1000:claude',
+  '__WIN__ web:0:@0:1:web',
+  '__PANE__ web:@0:%1:0:1:0:claude',
+  '__PANE__ web:@0:%2:1:0:0:claude',
+  `__AGENT__ web:ready:${ts}:stop`,
+].join('\n'));
+
+test('markSeen turns that pane idle and leaves its neighbour done', () => {
+  const store = memSeenStore();
+  const h = createHealthHistory({ seenStore: store });
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: twoPanesOneMarker() }, [box]);
+  expect(h.getSeries('b1').at(-1).agents['%2'].state).toBe('done');
+  expect(h.markSeen('b1', '%1', 200)).toBe(true);
+  const a = h.getSeries('b1').at(-1).agents;
+  expect(a['%1'].state).toBe('idle');
+  expect(a['%2'].state).toBe('done');
+  expect(store.data).toEqual({ b1: { '%1': 200 } });
+  // And it stays that way on the next sweep.
+  h.record({ b1: twoPanesOneMarker() }, [box]);
+  const b = h.getSeries('b1').at(-1).agents;
+  expect([b['%1'].state, b['%2'].state]).toEqual(['idle', 'done']);
+});
+
+test('refuses a ts ahead of the marker and a pane with no marker', () => {
+  const h = createHealthHistory({ seenStore: memSeenStore() });
+  h.record({ b1: twoPanesOneMarker() }, [{ id: 'b1', host: 'h' }]);
+  expect(h.markSeen('b1', '%1', 201)).toBe(false);
+  expect(h.markSeen('b1', '%9', 200)).toBe(false);
+  expect(h.markSeen('b9', '%1', 200)).toBe(false);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('done');
+});
+
+test('drops watermark keys that are not pane ids on load', () => {
+  // A file from before watermarks were per pane, keyed by session name.
+  const store = memSeenStore({ b1: { main: 999999, '%1': 150, '%2': 'x', '%3': null }, b2: { '%4': 9 }, b3: 'junk' });
+  const h = createHealthHistory({ seenStore: store });
+  h.record({ b1: one(mark('ready', 'stop', 200)) }, [{ id: 'b1', host: 'h' }]);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('done');   // 150 < 200
+  // Recording only b1 prunes b2, which persists what is left of b1.
+  expect(store.data).toEqual({ b1: { '%1': 150 } });
+});
+
+test('a reused pane id with an old watermark still reads done', () => {
+  // The box's tmux server restarted and handed out %1 again: the old
+  // watermark is compared with the new agent's own, newer, marker ts.
+  const h = createHealthHistory({ seenStore: memSeenStore({ b1: { '%1': 500 } }) });
+  h.record({ b1: one(mark('ready', 'stop', 900)) }, [{ id: 'b1', host: 'h' }]);
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('done');
+});
+
+test('prunes watermarks of panes no longer listed', () => {
+  const store = memSeenStore({ b1: { '%1': 100, '%2': 50 } });
+  const h = createHealthHistory({ seenStore: store });
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: paneStatus([{ mark: mark('ready', 'stop', 100) }, { pane: '%2', session: 'two', mark: mark('ready', 'stop', 50) }]) }, [box]);
+  expect(store.data).toEqual({ b1: { '%1': 100, '%2': 50 } });
+  h.record({ b1: one(mark('ready', 'stop', 100)) }, [box]);             // %2 left the listing
+  expect(store.data).toEqual({ b1: { '%1': 100 } });
+});
+
+test('seen survives a failed probe, a missing pane listing and a pane back at its shell, and goes with an empty tmux', () => {
+  const store = memSeenStore({ b1: { '%1': 100 } });
+  const h = createHealthHistory({ seenStore: store });
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: { reachable: false } }, [box]);
+  expect(store.data).toEqual({ b1: { '%1': 100 } });
+  const noPanes = one(null);
+  delete noPanes.panes;
+  h.record({ b1: noPanes }, [box]);
+  expect(store.data).toEqual({ b1: { '%1': 100 } });
+  h.record({ b1: paneStatus([{ cmd: 'zsh' }]) }, [box]);                // still listed, no agent
+  expect(store.data).toEqual({ b1: { '%1': 100 } });
+  h.record({ b1: { reachable: true, tmux: true, sessions: [], panes: [] } }, [box]);
+  expect(store.data).toEqual({ b1: {} });
+});
+
+test('recordAgents prunes the watermark of a pane that is gone', () => {
+  const store = memSeenStore({ b1: { '%1': 100, '%2': 50 } });
+  const h = createHealthHistory({ seenStore: store, now: () => 1 });
+  const both = paneStatus([{ mark: mark('ready', 'stop', 100) }, { pane: '%2', session: 'two', mark: mark('ready', 'stop', 50) }]);
+  h.record({ b1: both }, [RT_BOX]);
+  h.recordAgents(RT_BOX, one(mark('ready', 'stop', 100)));
+  expect(store.data).toEqual({ b1: { '%1': 100 } });
+  // A light probe without a pane listing prunes nothing.
+  const noPanes = one(mark('ready', 'stop', 100));
+  delete noPanes.panes;
+  h.recordAgents(RT_BOX, noPanes);
+  expect(store.data).toEqual({ b1: { '%1': 100 } });
+  expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('idle');
 });

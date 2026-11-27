@@ -1,4 +1,4 @@
-import { SESSION_NAME_RE } from './sshCommand.js';
+import { SESSION_NAME_RE, PANE_ID_RE } from './sshCommand.js';
 import { agentKindOf } from './agentKind.js';
 
 // Defined in agentKind.js; re-exported because other modules import it from here.
@@ -334,7 +334,14 @@ export function classifyTransitions(prev, next, thresholds, state, onScreen = ne
 // It also owns the agent "seen" watermarks (boxId -> pane id -> ts, persisted
 // through the optional seenStore): a pane whose latest turn ended at or before
 // its watermark reads idle instead of done. markSeen() advances a watermark
-// (never past the live marker's ts). Agent events persist the pane and its
+// (never past the live marker's ts). On load only pane-id keys are kept: a
+// file from before watermarks were per pane is keyed by session name, which
+// does not say which pane, so those turns read `done` once more until looked
+// at. A watermark is pruned only when a complete pane listing no longer lists
+// its pane — a failed probe, a stopped guest, a capped or failed listing, or a
+// pane back at its shell keeps it. A pane id reused after the box's tmux
+// server restarted is harmless: the watermark is compared with the marker's
+// own ts, and a new agent's is newer. Agent events persist the pane and its
 // place (`pane`, `session`, `windowId`, `window`, `paneIndex` when its window
 // held more than one agent) and their `cause`.
 export function createHealthHistory({
@@ -359,9 +366,19 @@ export function createHealthHistory({
     for (const [bid, m] of Object.entries(loadedSeen)) {
       if (!m || typeof m !== 'object') continue;
       const inner = new Map();
-      for (const [sess, ts] of Object.entries(m)) if (Number.isFinite(ts)) inner.set(sess, ts);
+      for (const [pane, ts] of Object.entries(m)) if (PANE_ID_RE.test(pane) && Number.isFinite(ts)) inner.set(pane, ts);
       seen.set(bid, inner);
     }
+  }
+  // Drop the watermarks of panes a complete listing no longer has. Returns
+  // whether anything was dropped.
+  function pruneSeen(boxId, status) {
+    const m = seen.get(boxId);
+    if (!m || !Array.isArray(status.panes)) return false;
+    const listed = new Set(status.panes.map((p) => p && p.pane));
+    let dropped = false;
+    for (const pane of [...m.keys()]) if (!listed.has(pane)) { m.delete(pane); dropped = true; }
+    return dropped;
   }
   function persistSeen() {
     if (!seenStore) return;
@@ -433,6 +450,7 @@ export function createHealthHistory({
         threshState.set(box.id, state);
         lastSample.set(box.id, sample);
         if (agentsKey(prev) !== agentsKey(sample)) changed(box.id);
+        if (pruneSeen(box.id, status)) seenChanged = true;
         for (const ev of evs) {
           const out = eventOf(box, at, ev);
           if (ev.metric) { out.metric = ev.metric; out.value = ev.value; }
@@ -497,6 +515,7 @@ export function createHealthHistory({
       threshState.set(box.id, { ...st, agents: baseline });
       replaceLast(box.id, next);
       if (agentsKey(prev) !== agentsKey(next)) changed(box.id);
+      if (pruneSeen(box.id, status)) persistSeen();
       const at = now();
       for (const ev of evs) emit(eventOf(box, at, ev));
       if (evs.length) save(events);
