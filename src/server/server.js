@@ -8,7 +8,7 @@ import websocket from '@fastify/websocket';
 import { verifyPassword, COOKIE_NAME, cookieOptions, sessionValue, sessionValueValid } from './auth.js';
 import { createLoginRateLimiter } from './rateLimit.js';
 import { createOidcClient, OidcError, pkcePair, randomState } from './oidcAuth.js';
-import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, buildKillSessionRemote, buildKillWindowRemote, resolveTools } from './boxActions.js';
+import { buildEnsureTmuxRemote, buildEnsureSessionRemote, buildSelectWindowRemote, buildSelectPaneRemote, buildKillSessionRemote, buildKillWindowRemote, resolveTools } from './boxActions.js';
 import { LOCAL_BOX_ID } from './localAgent.js';
 import { assertBoxSafe, SESSION_NAME_RE, WINDOW_ID_RE, PANE_ID_RE } from './sshCommand.js';
 import { createDeviceHostGuard } from './deviceHostGuard.js';
@@ -1051,6 +1051,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   // select-window returns. Nothing is persisted; boxes.json still stores only
   // the session name, deliberately, because a stored window would fight
   // prefix-n on the next reconnect.
+  //
+  // An optional `paneId` also focuses that pane of the window (buildSelectPaneRemote):
+  // how a click on an agent in the switcher or the dashboard takes the operator to the
+  // pane itself, not just to its window. Without it this is the window-only select.
   app.post('/api/boxes/:id/window', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'box not found' });
@@ -1059,8 +1063,8 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (setupManager?.currentForBox(box.id)?.status === 'running') {
       return reply.code(409).send({ error: 'box setup is still running' });
     }
-    const { session, windowId } = req.body || {};
-    // Both halves are re-validated here before either reaches a tmux target —
+    const { session, windowId, paneId } = req.body || {};
+    // Every id is re-validated here before it reaches a tmux target —
     // the chokepoint discipline iconCatalog.js and voiceCatalog.js apply to
     // their own allowlists — even though the client read them straight out of a
     // status snapshot.
@@ -1076,14 +1080,27 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) {
       return reply.code(400).send({ error: 'session name is required and must be letters, digits, _ or -' });
     }
+    // Absent is the window-only select; anything else must be a pane id. A present
+    // but invalid value (null, a number, '12') is a 400, never read as absent.
+    if (paneId !== undefined && (typeof paneId !== 'string' || !PANE_ID_RE.test(paneId))) {
+      return reply.code(400).send({ error: 'pane id must look like %12' });
+    }
     if (!boxActions?.execCommand) return reply.code(503).send({ error: 'window switching unavailable' });
-    const res = await boxActions.execCommand(box, buildSelectWindowRemote(session, windowId), { timeoutMs: 15000 });
+    const remote = paneId === undefined
+      ? buildSelectWindowRemote(session, windowId)
+      : buildSelectPaneRemote(session, windowId, paneId);
+    const res = await boxActions.execCommand(box, remote, { timeoutMs: 15000 });
     // A window that vanished between the poll and the click lands here, as does
     // a session/window pair that does not go together (verified on tmux 3.5a:
     // `-t '=web:@3'` where @3 belongs to another session exits 1 with "can't
-    // find window"). The next status poll rebuilds the dropdown without it.
+    // find window"), and with a paneId a pane that closed or moved to another
+    // window (exit 1, "can't find pane"; nothing was focused, the pane script
+    // resolves the whole target first). The next status poll rebuilds the
+    // dropdown without it.
     if (!res || res.code !== 0) {
-      return reply.code(502).send({ error: String(res?.stderr || '').trim() || 'failed to select window' });
+      return reply.code(502).send({
+        error: String(res?.stderr || '').trim() || (paneId === undefined ? 'failed to select window' : 'failed to select pane'),
+      });
     }
     // Re-probe this one box so the client's next /api/status is authoritative
     // about which window is now active. /api/status serves statusPoller's cached
@@ -1094,7 +1111,7 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // wired (tests) skips it, and a probe that throws or hangs must never turn a
     // switch that already succeeded on the box into an error response.
     try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
-    return { ok: true, windowId };
+    return paneId === undefined ? { ok: true, windowId } : { ok: true, windowId, paneId };
   });
   // The mic button's press-time verdict (spec 2026-09-04): 'claude' links the
   // browser mic to the box, anything else dictates. Same classifier as

@@ -151,3 +151,50 @@ test('POST window works on a deployment with no status poller wired', async () =
   expect(res.statusCode).toBe(200);
   expect(probed).toEqual([]);
 });
+
+test('POST window with a paneId runs the pane script and answers both ids', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'main', windowId: '@3', paneId: '%12' } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, windowId: '@3', paneId: '%12' });
+  const remote = calls.map((argv) => argv[argv.length - 1]).find((r) => r.includes('select-window'));
+  expect(remote).toContain("select-window -t '=main:@3'");
+  expect(remote).toContain("select-pane -Z -t '=main:@3.%12'");
+  expect(probed).toEqual([boxId]);
+});
+
+test('POST window rejects a paneId that is not a tmux pane id, without touching ssh', async () => {
+  const h = await headers();
+  for (const paneId of ['12', '', '%', 'main', '%1;rm -rf /', "%1'", '%' + '9'.repeat(10), '@3', 12, null]) {
+    const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'main', windowId: '@3', paneId } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'pane id must look like %12' });
+  }
+  expect(calls.length).toBe(0);
+});
+
+test('POST window without a paneId is the window-only script and answer, unchanged', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'main', windowId: '@3' } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true, windowId: '@3' });
+  const remote = calls.map((argv) => argv[argv.length - 1]).find((r) => r.includes('select-window'));
+  expect(remote).not.toContain('select-pane');
+});
+
+test('POST window with a paneId is refused while the box\'s setup job is running', async () => {
+  const h = await headers();
+  setupRunning = true;
+  const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'main', windowId: '@3', paneId: '%12' } });
+  expect(res.statusCode).toBe(409);
+  expect(calls.length).toBe(0);
+});
+
+test('POST window maps a pane that left the window to 502 and does not re-probe', async () => {
+  const h = await headers();
+  failNext = true;
+  const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'main', windowId: '@3', paneId: '%12' } });
+  expect(res.statusCode).toBe(502);
+  expect(res.json().error).toContain('no such window');
+  expect(probed).toEqual([]);
+});

@@ -8,6 +8,7 @@ import {
   shSingleQuote,
   SESSION_NAME_RE,
   WINDOW_ID_RE,
+  PANE_ID_RE,
 } from './sshCommand.js';
 import { storedUploadName, buildUploadRemote } from './uploads.js';
 import {
@@ -616,6 +617,44 @@ export function buildSelectWindowRemote(session, windowId) {
   if (!WINDOW_ID_RE.test(String(windowId))) throw new Error('invalid window id');
   const target = shSingleQuote(`=${session}:${windowId}`);
   return [...tmuxBinPreamble(), `"$TMUX_BIN" select-window -t ${target}`].join('\n');
+}
+
+// Focus one pane: select its window, then the pane. Same exact, session-qualified
+// targets as buildSelectWindowRemote (read its comment for the grouped-session and
+// prefix-match reasons), the pane qualified by its window too: `-t '=web:@7.%12'`.
+// All three ids are validated by the route and again here before quoting; typeof
+// checks, not String(x), as the kill builders do, so a type-confused caller throws.
+//
+// A pane that closed or moved between the poll and the click must fail WITHOUT
+// focusing anything: select-window first would already have dragged the operator
+// to the named window before select-pane found the pane missing from it. So the
+// script first asks tmux to resolve the full pane target with a strict, read-only
+// command (`capture-pane -p`, output discarded). `display-message -p` looks like the
+// cheaper probe and is not one: it resolves its target leniently and exits 0 for a
+// pane that is not there. Verified on tmux 3.6: the pane not in that window exits 1
+// with "can't find pane", a window not in the session "can't find window", an unknown
+// or only-prefixing session "can't find session". The route returns that stderr as
+// its 502. A pane that vanishes between the check and the select can still leave the
+// window switched, then fail; that window is microseconds wide and the next status
+// poll shows where the operator is.
+//
+// `-Z` keeps a zoomed window zoomed, now on the pane just focused. Without it tmux
+// unzooms the window when another pane of it is selected, which would also change
+// what every attached client sees.
+//
+// The two selects are joined with `&&`: a failed select-window skips select-pane and
+// the script's exit status is the first failure's.
+export function buildSelectPaneRemote(session, windowId, paneId) {
+  if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) throw new Error('invalid session name');
+  if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) throw new Error('invalid window id');
+  if (typeof paneId !== 'string' || !PANE_ID_RE.test(paneId)) throw new Error('invalid pane id');
+  const windowTarget = shSingleQuote(`=${session}:${windowId}`);
+  const paneTarget = shSingleQuote(`=${session}:${windowId}.${paneId}`);
+  return [
+    ...tmuxBinPreamble(),
+    `"$TMUX_BIN" capture-pane -p -t ${paneTarget} >/dev/null`,
+    `"$TMUX_BIN" select-window -t ${windowTarget} && "$TMUX_BIN" select-pane -Z -t ${paneTarget}`,
+  ].join('\n');
 }
 
 // Kill one tmux session on the box. Deliberately NOT a widening of

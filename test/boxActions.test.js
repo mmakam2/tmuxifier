@@ -951,3 +951,46 @@ test('the kill builders do not swallow a failure the way the teardown builder do
   expect(buildKillSessionRemote('web')).not.toContain('|| true');
   expect(buildKillWindowRemote('web', '@1')).not.toContain('|| true');
 });
+
+import { buildSelectPaneRemote } from '../src/server/boxActions.js';
+
+test('selects the window, then the pane, by exact qualified targets', () => {
+  const s = buildSelectPaneRemote('main', '@3', '%12');
+  expect(s).toContain(`"$TMUX_BIN" select-window -t '=main:@3'`);
+  expect(s).toContain(`"$TMUX_BIN" select-pane -Z -t '=main:@3.%12'`);
+  expect(s.indexOf('select-window')).toBeLessThan(s.indexOf('select-pane'));
+});
+
+test('the pane select is chained to the window select, so a failed window select skips it', () => {
+  // Joined with `&&`, not left to `set -e` alone: the script's exit status is the first
+  // failure's, and the second command never runs after a first one that failed.
+  const s = buildSelectPaneRemote('main', '@3', '%12');
+  expect(s).toMatch(/select-window -t '=main:@3' && .*select-pane -Z -t '=main:@3\.%12'/);
+});
+
+test('the pane target is resolved by a read-only command before anything is focused', () => {
+  // select-window first would drag the operator to the named window even when the pane is
+  // not in it; the strict capture-pane resolves the whole target first (display-message
+  // would not: it resolves leniently and exits 0 for a pane that is not there).
+  const s = buildSelectPaneRemote('main', '@3', '%12');
+  expect(s).toContain(`"$TMUX_BIN" capture-pane -p -t '=main:@3.%12' >/dev/null`);
+  expect(s.indexOf('capture-pane')).toBeLessThan(s.indexOf('select-window'));
+  expect(s).not.toContain('display-message');
+});
+
+test('the pane select throws on a bad id, rewriting nothing', () => {
+  expect(() => buildSelectPaneRemote('main', '@3', '%12; id')).toThrow('invalid pane id');
+  expect(() => buildSelectPaneRemote('ma in', '@3', '%12')).toThrow('invalid session name');
+  expect(() => buildSelectPaneRemote('main', '3', '%12')).toThrow('invalid window id');
+  for (const bad of ['', '12', '%', '%1;rm -rf /', "%1'", '%' + '9'.repeat(10), '@3', 12, null, undefined]) {
+    expect(() => buildSelectPaneRemote('main', '@3', bad)).toThrow('invalid pane id');
+  }
+  // typeof checks, not String(x): String(42) / String(null) read as valid session names.
+  for (const bad of [42, null, undefined]) {
+    expect(() => buildSelectPaneRemote(bad, '@3', '%12')).toThrow('invalid session name');
+  }
+});
+
+test('the pane select does not swallow a failure', () => {
+  expect(buildSelectPaneRemote('main', '@3', '%12')).not.toContain('|| true');
+});
