@@ -287,6 +287,16 @@ test('a pane listed under two grouped sessions is one entry, under the session i
   expect(sampleOf(nomark, 1).agents['%0']).toMatchObject({ session: 'twin', visible: true, focused: true, attached: false });
 });
 
+test('a grouped pane whose marker session is listed first keeps that session against a later twin row', () => {
+  const st = status();
+  st.sessions.push({ name: 'twin', windows: 2, attached: false, activity: 0, paneCmd: 'zsh', windowList: [{ id: '@0', index: 1, name: 'api', active: true }] });
+  st.panes.push({ session: 'twin', windowId: '@0', pane: '%0', index: 1, active: true, zoomed: false, cmd: 'claude' });
+  const a = sampleOf(st, 1).agents['%0'];
+  // main's row (first) holds; twin's later row is refused, with its flags.
+  expect(a).toMatchObject({ session: 'main', visible: false, focused: false, attached: true, state: 'blocked' });
+  expect([...onScreenPanes(st)].includes('%0')).toBe(false);
+});
+
 test('a session named like an Object.prototype key is an ordinary session', () => {
   const st = {
     reachable: true, tmux: true,
@@ -643,6 +653,61 @@ test('a status listing sessions but not panes neither emits nor replaces the bas
   expect(h.getEvents().events.map((e) => [e.kind, e.pane])).toEqual([['agent-done', '%1']]);
 });
 
+// %0 is a claude in the background window @0 of the attached session `main`.
+// `placeable: false` drops @0's window row (the window listing hit its cap, or
+// the window appeared between list-windows and list-panes), so %0 is listed
+// but cannot be placed.
+const unplaced = (m, { placeable = true, cmd = 'claude', listed = true } = {}) => {
+  const st = status({ paneMarks: marks(m) });
+  if (!placeable) st.sessions[0].windowList = st.sessions[0].windowList.filter((w) => w.id !== '@0');
+  st.panes = st.panes.flatMap((p) => (p.pane !== '%0' ? [p] : listed ? [{ ...p, cmd }] : []));
+  return st;
+};
+const agentEventsOf = (h) => h.getEvents().events.filter((e) => e.kind.startsWith('agent')).reverse().map((e) => [e.kind, e.pane]);
+
+test('an agent pane that cannot be placed is neither in the sample nor an exit, and its baseline is kept', () => {
+  const h = createHealthHistory();
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: unplaced({ '%0': ['working', 'prompt', 90] }) }, [box]);                       // A
+  h.record({ b1: unplaced({ '%0': ['working', 'prompt', 90] }, { placeable: false }) }, [box]); // B
+  expect(agentEventsOf(h)).toEqual([]);
+  expect('%0' in h.getSeries('b1').at(-1).agents).toBe(false);
+  // C: placed again and finished off screen. The kept baseline says working.
+  h.record({ b1: unplaced({ '%0': ['ready', 'stop', 95] }) }, [box]);
+  expect(agentEventsOf(h)).toEqual([['agent-input', '%0']]);
+  // D: gone from the listing. The exit still fires, once.
+  h.record({ b1: unplaced({ '%0': ['ready', 'stop', 95] }, { listed: false }) }, [box]);
+  expect(agentEventsOf(h)).toEqual([['agent-input', '%0'], ['agent-done', '%0']]);
+});
+
+test('a kept baseline entry lasts only while the pane is listed running an agent', () => {
+  const h = createHealthHistory();
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: unplaced({ '%0': ['working', 'prompt', 90] }) }, [box]);
+  h.record({ b1: unplaced({ '%0': ['working', 'prompt', 90] }, { placeable: false }) }, [box]);
+  h.record({ b1: unplaced({}, { listed: false }) }, [box]);   // left while unplaced: the exit
+  h.record({ b1: unplaced({ '%0': ['ready', 'stop', 95] }) }, [box]); // a new pane %0: first sight
+  expect(agentEventsOf(h)).toEqual([['agent-done', '%0']]);
+});
+
+test('a pane that cannot be placed and no longer runs an agent is an exit', () => {
+  const h = createHealthHistory();
+  const box = { id: 'b1', host: 'h' };
+  h.record({ b1: unplaced({ '%0': ['working', 'prompt', 90] }) }, [box]);
+  h.record({ b1: unplaced({}, { placeable: false, cmd: 'zsh' }) }, [box]);
+  expect(agentEventsOf(h)).toEqual([['agent-done', '%0']]);
+  expect(h.getEvents().events[0]).toMatchObject({ kind: 'agent-done', pane: '%0', session: 'main', window: '1:api', agent: 'claude' });
+  // The on-screen suppression still holds: a pane the operator was looking at
+  // when it stopped running its agent is no exit to announce.
+  const h2 = createHealthHistory();
+  h2.record({ b1: apiInFront({ paneMarks: marks({ '%0': ['working', 'prompt', 90] }) }) }, [box]);
+  const gone = apiInFront({ paneMarks: marks({}) });
+  gone.sessions[0].windowList = gone.sessions[0].windowList.filter((w) => w.id !== '@0');
+  gone.panes = gone.panes.map((p) => (p.pane === '%0' ? { ...p, cmd: 'zsh' } : p));
+  h2.record({ b1: gone }, [box]);
+  expect(agentEventsOf(h2)).toEqual([]);
+});
+
 test('a watermark loaded from seenStore.load() yields idle on the FIRST record of a ready/stop marker', () => {
   const h = createHealthHistory({ seenStore: memSeenStore({ b1: { '%1': 100 } }) });
   h.record({ b1: one(mark('ready', 'stop', 100)) }, [{ id: 'b1', host: 'h' }]);
@@ -847,6 +912,17 @@ test('recordAgents keeps the suppression and first-appearance rules', () => {
   h.recordAgents(RT_BOX, both(mark('working', 'unblock', 104)));
   h.recordAgents(RT_BOX, both(mark('ready', 'stop', 105)));
   expect(h.getEvents().events.map((e) => [e.kind, e.pane, e.session])).toEqual([['agent-input', '%2', 'two']]);
+});
+
+test('recordAgents: an agent pane that cannot be placed is neither in the sample nor an exit', () => {
+  const { h } = rtHistory();
+  h.record({ b1: unplaced({ '%0': ['working', 'prompt', 90] }) }, [RT_BOX]);
+  expect(h.recordAgents(RT_BOX, unplaced({ '%0': ['working', 'prompt', 90] }, { placeable: false }))).toBe(true);
+  expect(agentEventsOf(h)).toEqual([]);
+  expect('%0' in h.getSeries('b1').at(-1).agents).toBe(false);
+  expect(h.recordAgents(RT_BOX, unplaced({ '%0': ['ready', 'stop', 95] }))).toBe(true);
+  expect(agentEventsOf(h)).toEqual([['agent-input', '%0']]);
+  expect(h.getSeries('b1').at(-1).agents['%0']).toMatchObject({ state: 'done', windowId: '@0', windowName: 'api' });
 });
 
 test('recordAgents reports an agent that exited', () => {

@@ -71,13 +71,46 @@ function placePanes(status) {
   return placed;
 }
 
+// What the agent edges need from a status besides its sample, from one
+// placement:
+//   onScreen  every listed pane, agent or not, visible in an attached session
+//             (the agent-done edge asks it about a pane that has just stopped
+//             running an agent, and so has no entry any more)
+//   unplaced  every listed pane running an agent that has no placement (its
+//             window or session row is missing: the window listing hit its row
+//             cap, which has no completeness flag, or the window appeared
+//             between the two tmux calls). It has no entry, since it cannot be
+//             named or jumped to, but it has not exited either: the edges keep
+//             its baseline entry and raise no agent-done for it.
+// An absent pane listing gives two empty sets.
+function paneSets(status) {
+  const placed = placePanes(status);
+  const onScreen = new Set();
+  const unplaced = new Set();
+  for (const [pane, p] of placed) if (p.visible && p.attached) onScreen.add(pane);
+  const rows = status && Array.isArray(status.panes) ? status.panes : [];
+  for (const row of rows) if (row && !placed.has(row.pane) && agentKindOf(row.cmd) !== null) unplaced.add(row.pane);
+  return { onScreen, unplaced };
+}
+
 // The panes the operator can see right now: visible in an attached session.
-// Every listed pane, agent or not, because the agent-done edge asks it about a
-// pane that has just stopped running an agent (and so has no entry any more).
-// An absent pane listing gives an empty set.
 export function onScreenPanes(status) {
-  const out = new Set();
-  for (const [pane, p] of placePanes(status)) if (p.visible && p.attached) out.add(pane);
+  return paneSets(status).onScreen;
+}
+
+// The edge baseline that follows `agents`: the new map plus, for each pane in
+// `unplaced` (see paneSets), its entry from the previous baseline `before`,
+// unchanged. A real transition is then still seen once the pane can be placed
+// again, and its exit once it truly leaves. An entry is carried only while the
+// listing still shows its pane running an agent, so the baseline cannot grow.
+function carryUnplaced(agents, before, unplaced) {
+  let out = agents;
+  if (!before) return out;
+  for (const pane of unplaced) {
+    if (!Object.hasOwn(before, pane)) continue;
+    if (out === agents) out = Object.assign(Object.create(null), agents);
+    out[pane] = before[pane];
+  }
   return out;
 }
 
@@ -193,7 +226,8 @@ function placeOf(pane, entry, agents) {
 // Pure agent edge detector, per pane over `sample.agents` (see sampleOf).
 // `before` is the previous map, `next` the new sample (which must carry
 // `agents`), `onScreen` the panes on screen now (onScreenPanes of the status
-// `next` came from). Shared by the sweep (classifyTransitions) and the
+// `next` came from), `unplaced` the panes that status lists running an agent
+// but could not place (paneSets). Shared by the sweep (classifyTransitions) and the
 // real-time path (recordAgents), so a marker change reads the same whichever
 // one sees it. A pane with no previous entry (first appearance, restart)
 // emits nothing.
@@ -211,11 +245,13 @@ function placeOf(pane, entry, agents) {
 // operator may switch to it in the final poll interval; the `now` end comes
 // from `onScreen`, because a pane that stopped running an agent has no entry.
 // agent-done also requires the pane to be ABSENT from the map: an entry with no
-// state is a marker gap (the agent restarting in place), not an exit; and
-// `!next.stopped` — a Proxmox-stopped box carries no sessions, so absence
-// there is not an observation. Event fields describe the current entry, or the
-// previous one for agent-done.
-export function agentEdges(before, next, onScreen = new Set()) {
+// state is a marker gap (the agent restarting in place), not an exit; it must
+// not be `unplaced` either: a pane still listed running an agent has not
+// exited, whatever rows are missing around it; and `!next.stopped` — a
+// Proxmox-stopped box carries no sessions, so absence there is not an
+// observation. Event fields describe the current entry, or the previous one
+// for agent-done.
+export function agentEdges(before, next, onScreen = new Set(), unplaced = new Set()) {
   const events = [];
   const prev = before || Object.create(null);
   for (const [pane, now] of Object.entries(next.agents)) {
@@ -231,7 +267,7 @@ export function agentEdges(before, next, onScreen = new Set()) {
   if (next.up && !next.stopped) {
     for (const [pane, was] of Object.entries(prev)) {
       if (!was.state || (was.visible && was.attached)) continue;
-      if (Object.hasOwn(next.agents, pane) || onScreen.has(pane)) continue;
+      if (Object.hasOwn(next.agents, pane) || onScreen.has(pane) || unplaced.has(pane)) continue;
       events.push({ kind: 'agent-done', ...placeOf(pane, was, prev), ...(was.agent ? { agent: was.agent } : {}) });
     }
   }
@@ -244,9 +280,10 @@ export function agentEdges(before, next, onScreen = new Set()) {
 // nullish `prev` means this is the box's first sample: seed the threshold state
 // to match current values but emit nothing (a restart must not replay
 // down/over for boxes already in that state). `onScreen` is the set of panes
-// on screen in the status `next` came from (onScreenPanes), for agentEdges.
+// on screen in the status `next` came from (onScreenPanes), and `unplaced` the
+// agent panes it lists but could not place (paneSets), for agentEdges.
 // Returns { events, state }.
-export function classifyTransitions(prev, next, thresholds, state, onScreen = new Set()) {
+export function classifyTransitions(prev, next, thresholds, state, onScreen = new Set(), unplaced = new Set()) {
   const st = { ...(state || initThresholdState()) };
   const events = [];
   const warn = { cpu: thresholds.cpu, mem: thresholds.mem, disk: thresholds.disk };
@@ -283,9 +320,11 @@ export function classifyTransitions(prev, next, thresholds, state, onScreen = ne
   // rather than read as a first appearance. A probe whose pane listing was
   // absent or capped has no `agents` key either, so a listing that cannot be
   // trusted to be complete never reads as every missing pane having exited.
+  // An agent pane listed without its window row keeps its previous entry
+  // (carryUnplaced).
   if (next.agents) {
-    events.push(...agentEdges(st.agents, next, onScreen));
-    st.agents = next.agents;
+    events.push(...agentEdges(st.agents, next, onScreen, unplaced));
+    st.agents = carryUnplaced(next.agents, st.agents, unplaced);
   }
   // A confirmed-stopped guest is a positive observation that nothing runs: reset
   // the map so the first probe after start is a first appearance, not a stale
@@ -446,7 +485,8 @@ export function createHealthHistory({
         series.set(box.id, ring);
 
         const prev = lastSample.get(box.id);
-        const { events: evs, state } = classifyTransitions(prev, sample, thresholds, threshState.get(box.id), onScreenPanes(status));
+        const { onScreen, unplaced } = paneSets(status);
+        const { events: evs, state } = classifyTransitions(prev, sample, thresholds, threshState.get(box.id), onScreen, unplaced);
         threshState.set(box.id, state);
         lastSample.set(box.id, sample);
         if (agentsKey(prev) !== agentsKey(sample)) changed(box.id);
@@ -492,7 +532,8 @@ export function createHealthHistory({
         if (fresh[k] !== undefined) next[k] = fresh[k]; else delete next[k];
       }
       const st = threshState.get(box.id) || initThresholdState();
-      const evs = agentEdges(st.agents, next, onScreenPanes(status));
+      const { onScreen, unplaced } = paneSets(status);
+      const evs = agentEdges(st.agents, next, onScreen, unplaced);
       // The edge baseline, bridged across a marker gap. An agent pane with no
       // marker is a gap, not an exit (agentEdges says so too), and this path
       // lands in one systematically: an exiting agent removes its marker
@@ -503,7 +544,8 @@ export function createHealthHistory({
       // unreported. So a pane that had a state and now shows none keeps its
       // previous state in the BASELINE only; the sample shows the truth.
       // (Every entry runs an agent: a pane that stopped running one has no
-      // entry, and is the exit, not a gap.)
+      // entry, and is the exit, not a gap.) An agent pane listed without its
+      // window row keeps its previous entry, as on the sweep (carryUnplaced).
       const before = st.agents || Object.create(null);
       const baseline = Object.create(null);
       for (const [pane, now] of Object.entries(next.agents)) {
@@ -512,7 +554,7 @@ export function createHealthHistory({
           ? { ...now, state: was.state, cause: was.cause, ts: was.ts }
           : now;
       }
-      threshState.set(box.id, { ...st, agents: baseline });
+      threshState.set(box.id, { ...st, agents: carryUnplaced(baseline, before, unplaced) });
       replaceLast(box.id, next);
       if (agentsKey(prev) !== agentsKey(next)) changed(box.id);
       if (pruneSeen(box.id, status)) persistSeen();
