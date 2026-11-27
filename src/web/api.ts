@@ -50,19 +50,25 @@ export interface Status {
 export type AgentState = 'working' | 'blocked' | 'done' | 'idle';
 export type AgentCause = 'prompt' | 'resume' | 'stop' | 'start' | 'permission' | 'question' | 'elicitation' | 'unblock';
 export type AgentKind = 'claude' | 'opencode' | 'codex' | 'pi' | 'agy';
-export interface PaneSnapshot { ok: true; width: number; height: number; cursorX: number; cursorY: number; alt: boolean; mouse: boolean; content: string; agent: AgentState | null; agentCause: AgentCause | null; sessionName: string }
-export interface AgentEntry { present: boolean; agent?: AgentKind; attached: boolean; state?: AgentState; cause?: AgentCause; ts?: number }
+// `pane` is the pane that was captured (the active one when none was asked for);
+// `agentTs` is that pane's marker epoch, so a preview can tell a fresh state from a stale one.
+export interface PaneSnapshot { ok: true; width: number; height: number; cursorX: number; cursorY: number; alt: boolean; mouse: boolean; content: string; agent: AgentState | null; agentCause: AgentCause | null; agentTs?: number; pane?: string; sessionName: string }
+// One agent pane of a box (healthHistory.js sampleOf). Only panes running an agent
+// have an entry; `state` is absent while the pane has no marker. `visible` is
+// "on its session's screen right now" (its window is the session's active window
+// and the pane is not hidden by a zoom), `focused` is the active pane of that
+// window, `attached` is whether a client is attached to the session.
+export interface AgentEntry {
+  session: string; windowId: string; windowIndex: number; windowName: string; paneIndex: number;
+  agent: AgentKind; state?: AgentState; cause?: AgentCause; ts?: number;
+  visible: boolean; focused: boolean; attached: boolean;
+}
 export interface Sample {
   t: number; up: boolean; stopped?: boolean; tmux?: boolean; needsAuth?: boolean; keyChanged?: boolean;
   cpuPct?: number; memPct?: number; diskPct?: number;
-  // Agent state (see healthHistory.js sampleOf): hook-sourced ground truth
-  // only — a claude pane with no marker carries no state at all. `agent` is the
-  // legacy field for the box's configured session; `agentPresent` is the
-  // pane-based presence flag (server-side only, never a chip), agentAttached
-  // whether that session is attached.
-  agent?: AgentState; agentPresent?: boolean; agentAttached?: boolean;
-  // Every session's agent entry, keyed by session name (healthHistory.js).
-  // The pane chip, session rows, sidebar badge and standby strip read this.
+  // Every agent pane of the box, keyed by tmux pane id ('%12'), from hook-sourced
+  // ground truth only (healthHistory.js). The sidebar rows, pane chip, standby
+  // board and agent switcher read this through agentState.ts.
   agents?: Record<string, AgentEntry>;
 }
 export type ServiceCheckKind = 'http' | 'tcp' | 'none' | 'pihole' | 'truenas' | 'unifi' | 'immich';
@@ -184,6 +190,9 @@ export interface HealthEvent {
   seq: number; boxId: string; label: string; host: string; t: number;
   kind: HealthEventKind; reason?: string; metric?: 'cpu' | 'mem' | 'disk'; value?: number;
   session?: string; cause?: AgentCause; agent?: AgentKind;
+  // Agent events name the pane: `window` is '<index>:<name>', `paneIndex` is set
+  // only when that window held more than one agent (see agentState.ts eventPlace).
+  pane?: string; windowId?: string; window?: string; paneIndex?: number;
 }
 export type FleetTargetStatus = 'pending' | 'running' | 'ok' | 'error' | 'skipped' | 'cancelled' | 'interrupted';
 export type FleetJobStatus = 'running' | 'done' | 'cancelled' | 'interrupted';
@@ -305,20 +314,29 @@ export const api = {
   async createSession(id: string, name: string) {
     return j<{ ok: boolean; name: string }>(await fetch(`/api/boxes/${id}/sessions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }));
   },
-  // Switch which window a tmux session on the box is showing. Not a PATCH of the
-  // box: nothing is persisted, and every client attached to that session
-  // follows without a reattach (tmux's current window is session state).
+  // Switch which window a tmux session on the box is showing, and with `paneId`
+  // which pane of it has focus. Not a PATCH of the box: nothing is persisted, and
+  // every client attached to that session follows without a reattach (tmux's
+  // current window is session state).
   // The session is required, not derived from the window id: a grouped session
   // shares its windows, so an id alone does not name one session (see
   // buildSelectWindowRemote). The server resolves it once the box answers, so
   // the returned promise means the switch actually happened.
-  async selectWindow(id: string, session: string, windowId: string) {
-    return j<{ ok: boolean; windowId: string }>(await fetch(`/api/boxes/${id}/window`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, windowId }) }));
+  async selectWindow(id: string, session: string, windowId: string, paneId?: string) {
+    const body: { session: string; windowId: string; paneId?: string } = { session, windowId };
+    if (paneId !== undefined) body.paneId = paneId;
+    return j<{ ok: boolean; windowId: string; paneId?: string }>(await fetch(`/api/boxes/${id}/window`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   },
-  // Acknowledge a session's done state up to `ts` (its marker epoch), so the
-  // done chip clears everywhere. Server-owned watermark; this just posts it.
-  async agentSeen(id: string, session: string, ts: number) {
-    await j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/agent-seen`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, ts }) }));
+  // The Host Shell's counterpart: its one tmux session is the server's to name.
+  async localSelectWindow(windowId: string, paneId?: string) {
+    const body: { windowId: string; paneId?: string } = { windowId };
+    if (paneId !== undefined) body.paneId = paneId;
+    return j<{ ok: boolean }>(await fetch('/api/local-shell/window', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  },
+  // Acknowledge a pane's done state up to `ts` (its marker epoch), so the done
+  // chip clears everywhere. Server-owned watermark; this just posts it.
+  async agentSeen(id: string, pane: string, ts: number) {
+    await j<{ ok: boolean }>(await fetch(`/api/boxes/${id}/agent-seen`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pane, ts }) }));
   },
   // Kill a tmux session, or one window inside it, on the box. The session is
   // required in both forms — a grouped session shares its window objects, so an
@@ -385,8 +403,9 @@ export const api = {
   // as the fleet-wide reads: what a /live nudge fetches (liveLink.ts).
   async statusOf(id: string) { return j<Record<string, Status>>(await fetch(`/api/status?box=${encodeURIComponent(id)}&t=${Date.now()}`)); },
   async healthSeriesOf(id: string) { return j<Record<string, Sample[]>>(await fetch(`/api/health/series?box=${encodeURIComponent(id)}&t=${Date.now()}`)); },
-  async panePreview(boxId: string, session: string, signal?: AbortSignal) { return j<PaneSnapshot>(await fetch(`/api/boxes/${encodeURIComponent(boxId)}/pane?session=${encodeURIComponent(session)}&lines=40`, { signal })); },
-  async localPanePreview(signal?: AbortSignal) { return j<PaneSnapshot>(await fetch('/api/local-shell/pane?lines=40', { signal })); },
+  // A snapshot of one agent pane ('%12', percent-encoded here), never sized: no cols/rows.
+  async panePreview(boxId: string, pane: string, signal?: AbortSignal) { return j<PaneSnapshot>(await fetch(`/api/boxes/${encodeURIComponent(boxId)}/pane?pane=${encodeURIComponent(pane)}&lines=40`, { signal })); },
+  async localPanePreview(pane: string, signal?: AbortSignal) { return j<PaneSnapshot>(await fetch(`/api/local-shell/pane?pane=${encodeURIComponent(pane)}&lines=40`, { signal })); },
   async healthEvents() { return j<{ events: HealthEvent[]; latestSeq: number }>(await fetch(`/api/health/events?t=${Date.now()}`)); },
   async uiConfig() { return j<{ termFont: string | null; termFontSize: number; uploadMaxBytes: number; voice: boolean; voiceMaxSeconds: number; agentMail: boolean }>(await fetch('/api/ui-config')); },
   async uiSettings() { return j<UiSettings>(await fetch('/api/ui-settings')); },
