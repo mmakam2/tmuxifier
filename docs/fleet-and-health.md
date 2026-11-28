@@ -63,10 +63,10 @@ opened. Events survive restarts in `data/health-events.json`; the sample series 
 only. Tune with `TMUXIFIER_HEALTH_HISTORY_MAX`, `TMUXIFIER_HEALTH_EVENTS_MAX`,
 `TMUXIFIER_HEALTH_{CPU,MEM,DISK}_WARN_PCT`, and `TMUXIFIER_HEALTH_HYSTERESIS_PCT`.
 
-Tmuxifier also tracks the coding agent — Claude Code, OpenCode, Codex, pi or Antigravity — on
-**every tmux session** of a box that has an agent pane (not just the configured one), and on the
-Host Shell. A session counts when the active pane of its current window runs `claude`,
-`opencode`, `codex`, `pi` or `agy`. They all report the same four states:
+Tmuxifier also tracks the coding agents — Claude Code, OpenCode, Codex, pi or Antigravity — on
+every box and on the Host Shell, **one per tmux pane**: every pane running `claude`, `opencode`,
+`codex`, `pi` or `agy` is tracked on its own, in any session and any window, split panes and
+background windows included. They all report the same four states:
 
 - **working** — the agent is on a turn.
 - **blocked** — the agent needs you. The cause is shown: `permission` (a permission prompt,
@@ -74,12 +74,17 @@ Host Shell. A session counts when the active pane of its current window runs `cl
   Antigravity's question tool, or a background agent asking), or `elicitation` (an MCP
   elicitation dialog).
 - **done** — a turn finished and you haven't looked at it yet.
-- **idle** — the session just started, or a finished turn you have looked at.
+- **idle** — the agent just started, or a finished turn you have looked at.
 
-Split panes in one tmux session each report separately, and the session shows the most urgent:
-needs you, then working, then done, then idle. A session with one finished Claude pane and one
-still running reads working, and its "finished a turn" notification waits until both are done.
-Boxes need setup rerun with Claude Code ticked to get this.
+Two agents in split panes, or in two windows of one session, are two agents: each has its own
+state, its own notifications and its own row. Claude Code boxes need nothing for this. Codex, pi,
+Antigravity and OpenCode report per pane only once setup has been rerun on the box; until then all
+such agents in one tmux session share one state.
+
+**Grouped tmux sessions** (made with `tmux new-session -t`, which Tmuxifier never does itself)
+show the same pane in each session of the group. Tmuxifier tracks such a pane under one of those
+sessions. Watching it through another session of the group neither clears its `done` nor
+silences its notifications: you may get a notification you did not need, never miss one.
 
 State changes arrive in about a second. The server keeps one quiet SSH channel open per reachable
 box, over the connection it already holds; a small shell loop on the box reports the moment an
@@ -87,47 +92,58 @@ agent's state changes, and the server re-reads that box right away. Open tabs ar
 changed and refresh just that one, and a push notification goes out at the same moment. Nothing is
 installed on the box for this and no setup rerun is needed; the cost is one resident `sh` that
 wakes once a second, and one of the SSH sessions sshd allows per connection (`MaxSessions`,
-default 10, shared with that box's terminals and probes). The 30-second status poll still runs as the backstop, and it is still what
+default 10, shared with that box's terminals and probes). The same loop notices when you switch
+windows or panes with tmux keys, so what counts as on screen follows you within about a second
+(on the Host Shell, at the next status poll). The 30-second status poll still runs as the backstop, and it is still what
 notices everything that is not an agent state change: an agent exiting without a final report, a
 box going down, metrics. Set `TMUXIFIER_AGENT_WATCH=off` to drop the channel and return agent
 state to the poll's cadence.
 
-A `done` becomes `idle` only when a Tmuxifier client shows that pane in a visible, focused tab
-(phone: the pane being shown). A raw `ssh` + `tmux attach` never clears it, and the agent's idle
+A `done` becomes `idle` only when a Tmuxifier client shows that agent in a visible, focused tab
+(phone: the pane being shown). Looking at a window clears every agent visible in it, split panes
+included; an agent in a background window of the same session, or hidden behind a zoomed
+neighbour, stays `done` until you switch to it. A raw `ssh` + `tmux attach` never clears it, and the agent's idle
 timers never re-arm it. Claude Code's idle timers only ever end a `working` turn: they never clear
 `blocked`, so a permission dialog left open stays `blocked` however long nobody answers. A plain
-"No" to a permission prompt fires no hook in Claude Code, so the session reads `blocked` until you
+"No" to a permission prompt fires no hook in Claude Code, so the agent reads `blocked` until you
 type a prompt or Claude makes its next tool call. A granted permission stays `blocked` until that
 tool finishes; a long build reads Needs you for its duration. Looking at a finished turn in one
 tab or on one device clears it in every other open tab at once.
 
 OpenCode differs in two places, both because of how OpenCode itself behaves. Rejecting a
-permission or dismissing a question **ends the turn** in OpenCode, so the session moves on to
+permission or dismissing a question **ends the turn** in OpenCode, so the agent moves on to
 `done` right away; nothing stays `blocked` after a "No". A shell moved to the background with ctrl+b keeps the
-session `working` until that shell exits, even though OpenCode has already ended the turn, and its
+agent `working` until that shell exits, even though OpenCode has already ended the turn, and its
 completion starts a new turn. Every OpenCode TUI on a box talks to one shared OpenCode server, so
-the state is matched to tmux panes by directory: two TUIs in the same directory show the same
-combined state (see [The OpenCode checkbox](boxes-and-setup.md#the-opencode-checkbox)). When a TUI
-exits, its state is cleared within about 15 seconds.
+the state is matched to tmux panes by directory: two OpenCode panes in the same directory usually
+show the same combined state (see [The OpenCode checkbox](boxes-and-setup.md#the-opencode-checkbox)).
+When a TUI exits, its state is cleared within about 15 seconds.
 
-The state shows in several places. The sidebar badge beside each box shows its worst state
-(`blocked > done > working > idle`), with ` ×N` when several sessions carry a state and a tooltip
-listing them. The **attention strip** above the box list shows counts (`2 need you · 3 working ·
-1 done`); each segment filters the list to boxes with any session in that state. The engaged
+The state shows in several places. In the sidebar, a box's agents are listed as rows under the
+box, each with its state chip. A row is named after its tmux window, `2:frontend`; `.1`, `.2` is
+added when that window holds more than one agent, and the session in front (`main › 2:frontend`)
+when the box has agents in more than one session. Rows are ordered by session, window and pane,
+and stay put when a state changes. Clicking a row takes you to that agent: the box opens on its
+session (in a pane already showing it, if there is one), and its window and pane are selected,
+which moves every client attached to that session, as a window pick does. On a phone the drawer
+shows the same rows, and a tap jumps and closes the drawer. The **attention strip** above the box
+list counts agents (`2 need you · 3 working · 1 done`); each segment filters the list to boxes
+with any agent in that state. The engaged
 segment inverts to a solid fill in its state color; click it again, or the search field's ✕
 (which clears the search term and the filter together), to clear it. A filter expands collapsed
 groups. The standby dashboard has an **Agents** board with Needs you /
-Done / Working / Idle columns, and a card opens that box on that session. The session picker shows
-each session's state, and the pane header chip reads `working`, `blocked · <cause>`, `done` or
-`idle`. This is ground truth and the **only** source: a small Claude Code hook (or, for OpenCode,
+Done / Working / Idle columns, one card per agent, and a card takes you to that agent as a row
+does. The session picker shows the most urgent state of each session and of each window, and the
+pane header chip reads `working`, `blocked · <cause>`, `done` or `idle` for the agents you can see
+in that terminal (agents in the session's other windows are on their rows). This is ground truth and the **only** source: a small Claude Code hook (or, for OpenCode,
 a plugin; for Codex, pi and Antigravity, a reporter that reads their OSC 7501 status reports, see
 [The OSC reporter](boxes-and-setup.md#the-osc-reporter-codex-pi-antigravity)) on the box records the state at the moment it changes, and the status probe reads that
 record. There is no output-based fallback. A box whose setup hasn't been rerun since the hook was upgraded (or a
 claude started before and not yet restarted) shows `done`/`idle` but **never** `blocked` — that
 silence means "tick the Claude Code checkbox in the box's Edit dialog, save, then restart claude in
-each session". Until then the old hook also rewrites its marker with a fresh timestamp on every Claude Code
+each pane". Until then the old hook also rewrites its marker with a fresh timestamp on every Claude Code
 notification, including the ~60-second idle timer, so a `done` you have already looked at can come
-back within a minute; and a session that just started reads `done`, not `idle`.
+back within a minute; and an agent that just started reads `done`, not `idle`.
 
 The OSC reporter is the third source. It attaches by the pane's command (`codex`, `pi`, `agy`, and
 `opencode` only when the OpenCode plugin file is absent). Claude Code is excluded because it
@@ -138,23 +154,28 @@ server, so another TUI's pending permission shows as `blocked`. Antigravity's st
 (folder trust, sign-in) read `blocked` when agy is launched through the shell function setup
 adds, and usually `idle` otherwise; see the section linked above. Such a start-up prompt shows as
 `blocked` on the chip and the board but raises no "needs you" notification (an event needs a
-previous agent state for the session, and the status poll never sees the fraction of a second
+previous agent state for the pane, and the status poll never sees the fraction of a second
 before the prompt), and answering it makes agy report `idle`, which reads as a finished turn:
-`done` until seen, and a "finished a turn" notification when nobody is attached. Pane chips show
+`done` until seen, and a "finished a turn" notification when it is not on screen. Pane chips show
 only the state; events and push notifications name these agents "Codex", "pi" and "Antigravity".
 
-Three event kinds go into the same timeline, each carrying its session and naming the agent:
-**Claude needs you: <cause>** (blocked), **Claude finished a turn** (done), and **Claude exited**
-(**OpenCode needs you: <cause>** and so on for an OpenCode pane). All three are suppressed while you're attached to
-that session, since watching it is its own notification, and a session's first appearance never
-notifies. All three are pushed to the Android app (the blocked one as "Claude needs you" or
-"OpenCode needs you"). Seen state is saved on the host in `data/agent-seen.json`.
+Three event kinds go into the same timeline, each naming the agent and where it runs, in the
+words of its row (`main › 2:frontend.1`): **Claude needs you: <cause>** (blocked), **Claude
+finished a turn** (done), and **Claude exited** (**OpenCode needs you: <cause>** and so on for an
+OpenCode pane). All three are suppressed while that agent is on screen, that is, in the window in
+front of a session someone is attached to, since watching it is its own notification; an agent
+in a background window still notifies while you are attached and looking at another window. An
+agent's first appearance never notifies. Each agent keeps its own browser notification: two
+agents on one box never replace each other's. All three are pushed to the Android app (the
+blocked one as "Claude needs you" or "OpenCode needs you"), naming the same place; an app older
+than 1.3.0 shows no agents in its fleet list until it is updated (see
+[Versions](android-app.md#versions)). Seen state is saved on the host in `data/agent-seen.json`.
 
 The working chip carries a small animated indicator — Clawd, the Claude Code mascot, or the CLI's
 own star spinner. **Settings → Appearance** picks between six modes: Off (no indicator at all),
 Static Clawd, CLI star (the default), Wiggle, Pace, and Big hop. The choice is saved on the
 Tmuxifier host, so every browser you sign in from follows it (see [Appearance](#appearance)), and
-the sidebar badge, pane chips, and dashboard fleet strip all pick it up on their next status
+the sidebar's agent rows, pane chips, and dashboard fleet strip all pick it up on their next status
 refresh. Blocked chips
 stay still on purpose — stillness plus red is what makes it read as your turn — and a browser
 asking for reduced motion holds every mode on a single frame.
@@ -163,8 +184,8 @@ The **Host Shell** takes part in this too, once you tick **Install Claude Code h
 OpenCode, **Also install the OpenCode agent-state plugin**) in its ✎ dialog (see
 [Terminal features](terminal.md)). An agent running inside the host shell's tmux session raises
 the same events, labelled "Host Shell", and they are suppressed the same way
-while you're attached to that terminal; the state shows as a badge beside the **Host Shell**
-button and as the usual pane header chip. Agent events are the *only* kind it can raise — the
+while it is on screen; its agents are listed as rows under the **Host Shell** button, like a
+box's, and show the usual pane header chip. Agent events are the *only* kind it can raise — the
 host shell isn't probed over SSH, so it never reports down/recovered or CPU/memory/disk
 thresholds and has no card on the standby dashboard's fleet strip.
 

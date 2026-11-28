@@ -19,12 +19,13 @@ the same state.
 ## What it does
 
 **Supervise agents**
-- **Live agent state** for every session and split pane — *working*, *needs you*, *done*,
-  *idle* — reported by the agents themselves (Claude Code hooks, an OpenCode plugin, an OSC 7501
-  reporter for Codex, pi and Antigravity) and pushed to the browser in about a second.
-- An **agents board**, sidebar chips, an event timeline, browser notifications and phone push
-  when an agent needs you.
-- An **agent switcher** (hold Ctrl+Shift, tap K) that jumps to any agent session on any box,
+- **Live agent state** for every agent pane, split panes and background windows included —
+  *working*, *needs you*, *done*, *idle* — reported by the agents themselves (Claude Code hooks,
+  an OpenCode plugin, an OSC 7501 reporter for Codex, pi and Antigravity) and pushed to the
+  browser in about a second.
+- An **agents board**, a row per agent under each box in the sidebar (a click jumps to its
+  pane), an event timeline, browser notifications and phone push when an agent needs you.
+- An **agent switcher** (hold Ctrl+Shift, tap K) that jumps to any agent pane on any box,
   with a live preview.
 
 **Orchestrate agents**
@@ -218,25 +219,28 @@ stream per box. The full per-module map lives in [AGENTS.md](AGENTS.md).
 | [Deployment](docs/DEPLOY.md) | systemd, passwordless SSH keys, TLS, OIDC behind a tunnel |
 
 ## Agent supervision
-Every agent session on every box reports one of four states — **working**, **needs you** (a
+Every agent on every box reports one of four states — **working**, **needs you** (a
 permission prompt, a question, a sign-in), **done** (finished a turn you haven't looked at yet)
-and **idle** — per tmux session and per split pane. The state comes from the agent itself,
+and **idle** — per tmux pane, so two agents in split panes or in different windows of one
+session are tracked apart. The state comes from the agent itself,
 never from scraping the screen: ticking **Claude Code** in a box's setup installs its hooks,
 ticking **OpenCode** installs an agent-state plugin, and every setup installs an OSC 7501
 reporter that covers **Codex**, **pi** and **Antigravity**. A resident watch stream on each
 box's existing SSH connection carries a change to the browser in about a second.
 
-Those states drive the sidebar chips, the **agents board** on the standby dashboard, the agent
-switcher, the health event timeline, and notifications — in the browser and, through the
-Android app, as phone push. A **done** clears only when you actually look at it from a visible,
-focused tab, and an agent in a session you are attached to never notifies. How each agent is
+Those states drive the sidebar's agent rows (listed under each box; a click takes you to that
+pane), the **agents board** on the standby dashboard, the agent switcher, the health event
+timeline, and notifications — in the browser and, through the Android app, as phone push. A
+**done** clears only when you actually look at it from a visible, focused tab, and only for the
+agents in the window in front; an agent on screen never notifies, while one in a background
+window still does. How each agent is
 wired up is in [boxes & setup jobs](docs/boxes-and-setup.md); the events and notifications are
 in [status, health & Fleet Command](docs/fleet-and-health.md).
 
 ## Agent messaging
 The Claude Code and OpenCode (2.3.0 or later) sessions on your boxes can hand each other work:
-the agent on one box runs `tmx send billing "…"`, Tmuxifier holds the message until the session
-on `billing` is idle and wakes it with it (nothing is typed into the terminal), and the answer
+the agent on one box runs `tmx send billing "…"`, Tmuxifier holds the message until an agent in
+the session on `billing` is idle and wakes it with it (nothing is typed into the terminal), and the answer
 comes back through `tmx reply`. Every message travels over the SSH connections Tmuxifier already
 holds. Each box is off until you turn on its send and receive switches and their box lists in the
 Edit dialog, and the **Messages** drawer shows every thread and every refused attempt, with a
@@ -261,7 +265,7 @@ it. Setup and the tool reference are in [the MCP guide](docs/mcp.md).
 
 ## Android app (agent console)
 A native Kotlin/Compose companion in [`android/`](android/) for driving **agent sessions from a
-phone**: a fleet glance that lists each box's agents (most urgent first), a read-only pane snapshot
+phone**: a fleet glance that lists each box's agents, the box with the most urgent one first, a read-only pane snapshot
 rendered as native text (tmux stays the terminal emulator — phone viewing can never resize
 your desktop windows), a semantic action row, a local-until-send composer, and FCM push when
 an agent needs you. Devices enroll with a single-use **pairing code** minted in Settings →
@@ -300,7 +304,7 @@ and the seeding security model are in [boxes & setup jobs](docs/boxes-and-setup.
 Up to four terminals share the stage in nested, resizable splits. Pasting an image or dropping a
 file onto a terminal uploads it to the box over the existing SSH connection and types the quoted
 path at a Claude Code or shell prompt (never into a busy pane); selections and in-app OSC 52
-copies land on your clipboard. An **agent switcher** (hold Ctrl+Shift, tap K) jumps to any agent session across your boxes, with a preview and remappable hotkeys — see [agent switcher and hotkeys](docs/terminal.md#agent-switcher-and-hotkeys). **Voice dictation** (Ctrl+Shift+Space by default) records in your browser and
+copies land on your clipboard. An **agent switcher** (hold Ctrl+Shift, tap K) jumps to any agent pane across your boxes, with a preview and remappable hotkeys — see [agent switcher and hotkeys](docs/terminal.md#agent-switcher-and-hotkeys). **Voice dictation** (Ctrl+Shift+Space by default) records in your browser and
 transcribes on the Tmuxifier host with local whisper.cpp — audio never leaves the host — and on a
 pane running Claude Code the same button **links your mic to the box** so Claude Code's own
 `/voice` works there. A **Host Shell** opens a terminal on the Tmuxifier host itself, and every
@@ -331,7 +335,7 @@ clamps, and the lifecycle rules are in [the Proxmox guide](docs/proxmox.md).
 
 ## Standby dashboard
 When no terminal is docked, the stage shows a standby dashboard: an **agents board** with every
-agent session sorted into needs-you, done, working and idle columns (a card docks that session),
+agent pane sorted into needs-you, done, working and idle columns (a card jumps to that pane),
 **service tiles** for your homelab's web services (with automatically resolved logos and
 server-side liveness checks), a **fleet overview** card per box, and an **infrastructure
 readout** of Proxmox node health and NetBox IPAM utilization. Four credentialed tile kinds go

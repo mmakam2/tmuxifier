@@ -130,7 +130,8 @@ Google-free sender (UnifiedPush/ntfy) is a planned follow-up, not a current feat
 App 1.3.0 shows agents per pane, which needs a Tmuxifier server that tracks agent state per
 pane. Against a server that has not been upgraded it still works, but shows no agent rows,
 acknowledges nothing, and a notification tap opens the box. An older app against an upgraded
-server shows no agent state until it is updated.
+server shows no agents in its fleet list until it is updated; its session screen still shows the
+state of the pane on screen.
 
 ## Other apps on the phone
 

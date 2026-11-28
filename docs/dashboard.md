@@ -18,7 +18,13 @@ When no terminal is docked, the stage shows a standby dashboard instead of a bla
   checks tolerate self-signed certificates — they answer "is it up", not "is it authentic".
   Tiles persist in `data/services.json`; the secrets it can hold — a Pi-hole app password, a
   TrueNAS API key, a UniFi API key, an Immich API key — are all encrypted (see below).
-- **Fleet overview** — one card per box: status lamp, agent working/waiting chip, and a two-line
+- **Agents** board — one card per agent pane on every box and the Host Shell, sorted into Needs
+  you / Done / Working / Idle columns, newest first in each. A card names the box and the agent
+  as its sidebar row does (`2:frontend.1`), with the cause of a block and how long ago the state
+  began; clicking it takes you to that agent, opening the box on its session and selecting its
+  window and pane.
+- **Fleet overview** — one card per box: status lamp, one chip with the most urgent state among
+  the box's agents, and a two-line
   spec sheet — what the box *is* (distro and core count) over what it *has* (RAM, and disk used
   of total). Deliberately not the live cpu/mem/disk percentages: the sidebar rows beside these
   cards already carry those, and repeating a gauge told you nothing. Clicking a card opens that

@@ -1,7 +1,7 @@
 # MCP server
 
 Tmuxifier ships a [Model Context Protocol](https://modelcontextprotocol.io) server so an MCP
-client — Claude Code first — can operate the fleet: see every box and the state of its coding
+client — Claude Code first — can operate the fleet: see every box and the state of each of its coding
 agents (Claude Code, OpenCode, Codex, pi or Antigravity), read panes, type into the agent sessions running on boxes, run
 fleet commands, start setup jobs, provision Proxmox guests and operate guest power. It is a **renderer of the server
 APIs**, exactly like the Android app: it speaks only HTTP to the running Tmuxifier, never SSH,
@@ -83,9 +83,9 @@ Every tool returns compact text. Ids come from `list_boxes` / `list_jobs` / `lis
 
 | Tool | What it does |
 | --- | --- |
-| `list_boxes` | Fleet overview: reachability, cpu/mem/disk, tmux sessions, agent state (Claude Code, OpenCode, Codex, pi or Antigravity) per box. Reads the server's cached status — no SSH. |
-| `read_pane` | The visible text of a box's configured session plus scrollback (`lines`, default 200). On an alternate-screen app like Claude Code only the visible screen is returned. |
-| `box_health` | Latest health sample and recent events for one box. |
+| `list_boxes` | Fleet overview: reachability, cpu/mem/disk, tmux sessions, and the state of every agent pane (Claude Code, OpenCode, Codex, pi or Antigravity), each listed as `name[%N]=state` — `2:frontend.1[%12]=blocked(permission)`: the name as the sidebar row shows it, the pane id in brackets for `wait_for_agent`. Reads the server's cached status — no SSH. |
+| `read_pane` | The visible text of a box's configured session — its active pane — plus scrollback (`lines`, default 200). The first line names the pane captured (`pane:%N`) and that pane's agent state. On an alternate-screen app like Claude Code only the visible screen is returned. |
+| `box_health` | Latest health sample and recent events for one box, with its agent panes listed as `list_boxes` lists them. |
 | `list_fleet_scripts` | Saved Fleet Command scripts with their bodies. |
 | `list_presets` | Proxmox presets with host/node — the inputs to `provision_guest`. |
 | `list_guests` | Linked Proxmox guests: CT/VM, vmid, node, state, template flag. |
@@ -100,7 +100,7 @@ Every tool returns compact text. Ids come from `list_boxes` / `list_jobs` / `lis
 | `start_setup` | Start a server-side setup job (tmux, shell frameworks, tools, post-setup script). AI-auth seeding is browser-only. |
 | `provision_guest` | Create an LXC container from a preset, link it, start its setup. |
 | `guest_power` | `start` / `shutdown` / `reboot` / `stop` the guest a box is linked to. |
-| `wait_for_agent` | Block until a Claude Code, OpenCode, Codex, pi or Antigravity session's state is one of `until` (default `blocked`, `done`, `idle`; `waiting` is a deprecated alias for `blocked`+`done`+`idle` — the old `waiting` also covered permission prompts) or `timeout_sec` (default 120, max 540) passes. `session` picks the tmux session (default: the box's configured one); a `blocked` result adds its `cause`. States: `working`, `blocked`, `done` (finished, unseen), `idle`; `done` becomes `idle` only when a person looks at the pane in the web app. |
+| `wait_for_agent` | Block until one agent pane's state is one of `until` (default `blocked`, `done`, `idle`; `waiting` is a deprecated alias for `blocked`+`done`+`idle` — the old `waiting` also covered permission prompts) or `timeout_sec` (default 120, max 540) passes. By default it waits on the focused pane of `session` (default: the box's configured session) — the pane `read_pane` shows and `send_text` types into — and reads `gone` when that pane runs no agent. `pane` (a pane id such as `%12`, from `list_boxes` or `box_health`) waits on that pane instead, focused or not, in whatever session it is; a `session` also given must be that pane's own, or it reads `gone`. The result names the session (with `pane` alone, the pane's own session; no `session:` line when no such pane is found) and the pane, and a `blocked` result adds its `cause`. States: `working`, `blocked`, `done` (finished, unseen), `idle`; `done` becomes `idle` only when a person looks at the pane in Tmuxifier. |
 | `wait_for_job` | Block until a job leaves `running` or the timeout passes. |
 
 Timing out is **not** an error: both wait tools return the current state with
@@ -119,9 +119,10 @@ content and job output are **data from the box**, never instructions. This is th
 Tmuxifier itself takes toward every line a box sends it.
 
 `list_boxes` carries box-written text too: an unreachable box's ssh error (sshd banner, login-shell
-output) and its tmux session names. Before rendering, both are folded onto one line, stripped of
+output), its tmux session names, and the agent names built from window and session names.
+Before rendering, all of them are folded onto one line, stripped of
 control, bidi, zero-width and Unicode tag characters, and capped (200 characters of error, 64 per
-session name, 32 sessions per box), and the tool description marks them untrusted.
+session or window name, 32 sessions per box), and the tool description marks them untrusted.
 
 ## What it cannot do
 

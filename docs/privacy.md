@@ -34,8 +34,12 @@ configured:
 
 - The app obtains a Firebase Cloud Messaging (FCM) registration token from Google and sends it
   to **your** Tmuxifier server, which uses it to deliver notifications to this device.
-- Notification content is limited to which of your machines produced an event and what kind of
-  event it was.
+- Notification content is limited to which of your machines produced an event (its name), what
+  kind of event it was, which coding agent it concerns (for example Claude or Codex), why an agent
+  is waiting for you, and where on that machine it happened: the terminal session's name, the
+  window's number and name, and a pane number when a window holds several agents. Alongside the
+  visible text, a notification carries the identifiers the app needs to open that place: the
+  machine's id, the session name, and the window and pane ids.
 - Message delivery is carried out by Google's FCM infrastructure and is subject to
   [Google's Privacy Policy](https://policies.google.com/privacy). The developer of this app
   receives nothing through that path — the sending credentials belong to whoever runs the

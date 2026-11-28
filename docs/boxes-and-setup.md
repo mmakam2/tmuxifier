@@ -109,14 +109,14 @@ Ticking it makes the setup run do five things, each skipping cleanly when alread
 - **Push this host's statusline**: merges a `statusLine` block into the box's
   `~/.claude/settings.json`, preserving every other key in that file.
 - **Install the agent-state hook**: a small Claude Code hook that records whether the agent
-  is working or waiting for you — the **only** source the dashboard's agent chip, the sidebar
-  badge, and the "claude is waiting for input" notifications read. There is no guessing from
+  is working or waiting for you, for its own tmux pane — the **only** source the agent chips, the
+  sidebar's agent rows, and the agent notifications read. There is no guessing from
   terminal output. The hook never blocks or modifies the agent: it only writes a one-line
   state file under `~/.tmuxifier-agent/`, and its settings.json entries are merged
   alongside any hooks you already have, never over them. The state is that of the pane's own
   Claude Code. A `claude -p` run inside that session (by the agent through its Bash tool, or
   left running in the background by a plugin or a script) fires the same hooks, and the hook
-  ignores it: it cannot change or clear the session's state, and its mail listener and
+  ignores it: it cannot change or clear the pane's state, and its mail listener and
   delivery confirmation stand down the same way. Boxes set up before v1.24.95 get this with
   their next setup run with Claude Code ticked; a running claude need not be restarted.
 - **Install agent messaging**: the `tmx` command (`~/.tmuxifier-mail/tmx`, linked from
@@ -178,9 +178,9 @@ On a box with a pre-existing Claude install, ticking the checkbox simply adds wh
 missing. Unchecked means setup installs and refreshes nothing Claude-related — no CLI install, no
 statusline, no agent-state hook refresh, no messaging hooks, skill or rule, no voice link (the
 messaging step may still run for a ticked **OpenCode**, but then writes only OpenCode's half and
-the shared `tmx`). So if the agent chip or badge is missing for a running claude:
+the shared `tmx`). So if a running claude has no agent row or chip:
 open the box's Edit dialog, tick **Claude Code**, save, and once the setup job reports done, restart
-claude in that session (Claude Code reads its hooks at startup).
+claude in that pane (Claude Code reads its hooks at startup).
 
 To remove the hook from a box: delete the five `tmuxifier-agent-hook` entries from the box's
 `~/.claude/settings.json` and `rm -rf ~/.tmuxifier-agent`. With it removed, that box reports
@@ -293,6 +293,11 @@ pane that has none and only ever closes one its own live listener is reading, so
 your own on an agent pane is left alone (it also stops the reporter for that pane). A box without
 python3 or tmux reports `osc-reporter skipped (no python3 on the box)` /
 `(no tmux on the box)` and the setup still succeeds.
+
+Each listener records its own pane's state only, so two Codex panes split in one window, or an
+agy in a background window, each show their own. A box whose reporter was installed before
+per-pane state needs a setup rerun for this; until then the Codex, pi and agy panes of one tmux
+session share one state. The rerun upgrades running listeners in place, mid-turn included.
 
 - **Claude Code is not covered.** It probes with `OSC 7501;?` and then DA1; tmux answers DA1
   itself, so Claude concludes the terminal doesn't support the sequence and never reports inside

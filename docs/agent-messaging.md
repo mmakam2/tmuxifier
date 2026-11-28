@@ -199,8 +199,13 @@ When the message is delivered depends on the receiving session:
 started before setup was rerun (restart it), an OpenCode that is older than 2.3.0, has not been
 used yet or cannot be matched to the tmux session (see [Limits](#limits-in-this-version)), or
 an agent that is neither (Codex, pi, Antigravity). "Running an agent" means Tmuxifier reads an
-agent state for that session, the same one the dashboard shows; an agent in another window of the
-session counts too.
+agent state for at least one pane of that session, the same one the dashboard shows; an agent in
+another window of the session counts too.
+
+Mail is addressed to a session, but agents are tracked per pane. When a session holds several
+agents, in split panes or in several windows, a message goes to one of them that is idle and
+listening, even while another is working; it waits only while none of them is. `tmx who` shows
+one word per session, the most urgent of its agents (blocked, then working, then idle).
 
 A message can be up to 64 KiB. The wake carries the first 4000 characters of it, and a longer one
 ends with a line telling the agent to run `tmx read` for the rest.
@@ -353,8 +358,9 @@ when it could start a thread with `billing`: `orders` may send to it and `billin
 | `--fresh billing` | any | A new worker in the box's first project, when the box allows it |
 | `--fresh --project web billing` | any | A new worker in the project `web`, when the box allows it |
 
-"An agent" here is a session that can take mail: one whose agent state Tmuxifier reads and whose
-pane runs Claude Code, OpenCode or something it cannot tell. A session running Codex, pi or
+"An agent" here is a session that can take mail: one with a pane whose agent state Tmuxifier
+reads and which runs Claude Code, OpenCode or something it cannot tell, in any window of the
+session. A session running Codex, pi or
 Antigravity reports a state but never listens, so it does not count: a box whose only agent is
 one of those gets a worker rather than a message that waits for ever. The sending session never
 counts either. An agent on `orders` that sends to `orders` (or `.`) with no other agent there
@@ -405,7 +411,8 @@ A worker's tmux session is named `worker-<project>-<n>`: `worker-api-1`, then `w
 while the first is still there. The number is the lowest one that no session on the box uses.
 
 **At most N worker sessions** counts the sessions on the box whose name starts with `worker-`
-and whose active pane runs Claude Code. This includes a session you named like that yourself.
+and where a pane runs Claude Code (a split worker counts once). This includes a session you
+named like that yourself.
 When the box is at its limit, a send that would start a worker is refused (`refused: billing
 already runs as many started agents as its operator allows`), and pressing **Start** shows an error message
 instead. Workers stay until you close them: close one with the **×** in a pane's session picker,

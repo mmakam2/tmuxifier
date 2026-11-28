@@ -16,11 +16,12 @@ divider drags to resize its own split (double-click resets 50/50, arrow keys wor
 focused, and its small ⤢ control flips that split's direction). Every terminal pane — split
 or not — carries a header bar: status dot, box name, `user@host`, and the **active-session
 dropdown** on the left; on the
-right a state chip (agent **working**/**waiting** from the health poller, or connection
+right a state chip (the agent state of what the terminal shows, or connection
 state while the terminal reconnects) beside the voice, reconnect ↻, and — in a split —
 undock ✕ buttons, so nothing floats over the terminal itself. The dropdown lists the box's
 live tmux sessions in name order — the same order in every pane, whichever session it is
-on — with each session's windows indented beneath it, `→ 1: zsh`-style, and
+on — with each session's windows indented beneath it, `→ 1: zsh`-style; a session row shows
+the most urgent agent state in that session and a window row the most urgent in that window, and
 the selected row tracks whichever window the session actually has active — so the dropdown
 answers "which window am I looking at", not just which session. Its contents are re-read
 from the box the moment you reach for the control — hovering it, or tapping it on a phone —
@@ -37,10 +38,12 @@ it, and nothing else is touched — not another pane on the same box, not anothe
 not the box's own configured session (see
 [Several panes of one box](#several-panes-of-one-box) below for what that means when a box has
 more than one pane docked). To change what a box opens to by default, use the session field in
-its Edit dialog instead — that's the one place a session choice is still global. The agent
-chip and notifications stay pinned to the box's **configured** session specifically, so a pane
-you've pointed at some other session goes quiet — that's the cue that Tmuxifier isn't tracking
-agent state for whatever this pane happens to be showing, not a bug. A session whose name falls outside Tmuxifier's safe charset (letters,
+its Edit dialog instead — that's the one place a session choice is still global. Agents are
+tracked in every session of the box, whichever one a pane shows. The header's agent chip is the
+most urgent state among the agents you can see in that terminal: the panes of the window in
+front, or only the zoomed one when a pane is zoomed. Agents in the session's other windows are
+not in the chip; they show on their window's row in the dropdown and on their own rows in the
+sidebar. A session whose name falls outside Tmuxifier's safe charset (letters,
 digits, `_`, `-`, up to 64) is listed but greyed out — switching would silently rename it, so
 it can only be attached from the command line — and its windows are greyed out with it,
 except when it's the pane's own current session, where no switch is needed to reach them. The
@@ -148,31 +151,35 @@ Claude Code's selection copy) land on your system clipboard too.
 ## Agent switcher and hotkeys
 
 Jump to whichever agent needs you without reaching for the sidebar. **Hold Ctrl+Shift and tap
-K**: a list of agent sessions opens with the previous one highlighted. Tap K again, or press
+K**: a list of agents opens with the previous one highlighted. Tap K again, or press
 **↑/↓**, to step through the list, then **release** to jump. A quick tap-and-release flips
-straight back to the session you were just in, and the list only paints if you keep holding.
+straight back to the agent you were just at, and the list only paints if you keep holding.
 **Esc**, switching away from the browser window, or clicking outside the switcher's panel
 cancels (on Windows Ctrl+Shift+Esc belongs to the system, which opens Task Manager, so there the
 way to cancel is to click outside the panel). Clicking a row also jumps to it (on macOS the click
 is Ctrl+click, which the browser reports as a right click; the switcher takes it and keeps the
 context menu away). While the list is showing, a click never reaches the page underneath.
 
-**What's listed.** Every tmux session with an agent state (working, needs you, done, idle) on a
-reachable box, plus the Host Shell's `local` session. The session you're in is first, then the
-ones you visited most recently, then the rest by urgency (needs you, done, working, idle), newest
-first. The order is fixed while the list is open; states and ages keep updating.
+**What's listed.** Every agent with a state (working, needs you, done, idle) on a reachable box,
+one row per pane, named as its sidebar row, plus the agents in the Host Shell's `local` session.
+The agent you're looking at (the focused pane of the focused terminal's session) is first, then
+the ones you visited most recently, then the rest by urgency (needs you, done, working, idle),
+newest first. The order is fixed while the list is open; states and ages keep updating.
 
-**What release does.** If the session is already open in a docked pane, that pane takes focus.
-Otherwise, if the focused pane shows the same box on another session, it switches session in
-place. Otherwise the focused pane is replaced (or a pane opens when the stage is empty), and
-the terminal it replaces is closed and released at once, so the session you left stops counting
+**What release does.** It takes you to that agent's session first: if the session is already
+open in a docked pane, that pane takes focus. Otherwise, if the focused pane shows the same box on
+another session, it switches session in place. Otherwise the focused pane is replaced (or a pane
+opens when the stage is empty). Then, unless the agent is already the focused pane there, its
+window and pane are selected, which moves every client attached to that session, as a window pick
+does. A terminal the switcher replaces is closed and released at once, so the session you left stops counting
 as attached and its next notification isn't suppressed. Only the pane the switcher replaces is
 released this way: a terminal parked by the home button or replaced from the sidebar stays
 connected, and its session attached, as before. Jumping never marks a finished turn as seen on
-its own; the pane you land in does that once it is visible and focused.
+its own, nor anything in the window you leave; the agent you land on is marked seen once it is in
+front in a visible, focused terminal.
 
 **Preview.** Rest on a row for a moment and the right-hand side shows a plain-text snapshot of
-that session's screen. It is read-only: it doesn't resize anything and doesn't mark anything
+that agent's pane. It is read-only: it doesn't resize anything and doesn't mark anything
 seen. Stepping never waits for it.
 
 **While the switcher is open**, Ctrl+Shift+↑/↓ steps the list instead of moving pane focus;
@@ -303,9 +310,10 @@ Host Shell's tmux session reports its state the same way (see
 the host, and reports `skipped` otherwise. No restart is needed: a running OpenCode server loads
 the plugin within seconds.
 
-Once a hook-aware claude runs **inside the Host Shell's own tmux session** (`local`), its
-working/waiting state shows as a badge next to the **Host Shell** button in the sidebar and as
-the usual chip in the pane header, exactly like a box. Only that session is tracked: a claude
+Once a hook-aware claude runs **inside the Host Shell's own tmux session** (`local`), it is
+listed as a row under the **Host Shell** button in the sidebar, with its state, and shows the
+usual chip in the pane header, exactly like a box; clicking the row selects its window and pane
+in the Host Shell. Only that session is tracked: a claude
 started outside tmux, or in a different tmux session on the same host, contributes nothing. The
 checkbox is an action rather than a stored setting — it starts unchecked every time the dialog
 opens, so reopening it won't silently reinstall, and unchecking it never uninstalls anything.
