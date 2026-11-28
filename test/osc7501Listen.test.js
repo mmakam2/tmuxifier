@@ -56,6 +56,16 @@ async function waitFor(fn, ms = 2000) {
   }
 }
 const readIf = (f) => (existsSync(f) ? readFileSync(f, 'utf8') : null);
+// On a fold change the listener writes the marker FIRST and persists its entry
+// (under entries.lock) after it, so a marker on disk does not mean the entry is
+// settled. A test that rewrites, restamps or removes the entry (the loop's
+// part, which really does it under that lock) must first wait until the
+// listener's persist for the line `c` it just saw has landed; otherwise the
+// persist can read the entry before the test's write and write after it.
+const waitPersisted = (t, c) => waitFor(() => {
+  const e = JSON.parse(readFileSync(t.entryFile, 'utf8'));
+  return e.lastWritten === c ? e : null;
+});
 const waitMarker = (t, session, re) => waitFor(() => { const c = readIf(t.markerOf(session)); return c && re.test(c) ? c : null; });
 
 test('working then idle write the marker, EOF removes marker and entry', async () => {
@@ -63,7 +73,7 @@ test('working then idle write the marker, EOF removes marker and entry', async (
   t.send(osc('state=working'));
   const c = await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
   expect(statSync(t.markerOf('web')).mode & 0o777).toBe(0o644);
-  const entry = JSON.parse(readFileSync(t.entryFile, 'utf8'));
+  const entry = await waitPersisted(t, c);
   expect(entry.pid).toBe(t.child.pid);
   expect(entry.session).toBe('web');
   expect(entry.lastWritten).toBe(c);
@@ -97,8 +107,8 @@ test('handover seeds records and keeps marker and entry on EOF', async () => {
     lastWritten: 'web:working:1:prompt:%5\n', handover: true, attachedAt: 1,
   }));
   t.send(osc('state=idle'));
-  await waitMarker(t, 'web', /^web:ready:\d+:stop:%5\n$/);
-  const cur = JSON.parse(readFileSync(t.entryFile, 'utf8'));
+  const c = await waitMarker(t, 'web', /^web:ready:\d+:stop:%5\n$/);
+  const cur = await waitPersisted(t, c);
   expect(cur.pid).toBe(t.child.pid);
   expect(cur.handover).toBe(false);
   writeFileSync(t.entryFile, JSON.stringify({ ...cur, handover: true }));
@@ -138,7 +148,7 @@ test('a pane whose session changed: the marker moves to the new name and the old
   t.send(osc('state=idle'));
   const c = await waitMarker(t, 'web2', /^web2:ready:\d+:start:%5\n$/);
   expect(existsSync(t.markerOf('web'))).toBe(false);
-  await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).lastWritten === c);
+  await waitPersisted(t, c);
   t.child.stdin.end();
   expect(await t.exited).toBe(0);
   expect(existsSync(t.markerOf('web2'))).toBe(false); // EOF removes the file lastWritten names
@@ -190,7 +200,8 @@ test('a bare clear removes the marker this reporter wrote, and the next idle is 
 test('a successor that owns the entry is not overwritten by the handed-over listener at EOF', async () => {
   const t = setup();
   t.send(osc('state=working'));
-  await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
+  const c = await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
+  await waitPersisted(t, c);
   const successor = JSON.stringify({
     pid: t.child.pid + 100000, sha: 'new', session: 'web', records: {}, lastWritten: null, handover: true, attachedAt: 2,
   });
@@ -218,9 +229,9 @@ test('a probe-only chunk is not an observation: a foreign working marker is unto
 test('a listener the loop restamped (handover in flight) touches neither marker nor entry at EOF', async () => {
   const t = setup();
   t.send(osc('state=working'));
-  await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
+  const c = await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
   // The loop's pre-attach write: pid stripped, attachedAt restamped, handover set.
-  const cur = JSON.parse(readFileSync(t.entryFile, 'utf8'));
+  const cur = await waitPersisted(t, c);
   const restamped = JSON.stringify({ ...cur, pid: undefined, attachedAt: cur.attachedAt + 1, handover: true });
   writeFileSync(t.entryFile, restamped);
   t.child.stdin.end();
@@ -232,7 +243,8 @@ test('a listener the loop restamped (handover in flight) touches neither marker 
 test('the loop dropped the entry for a gone pane before EOF: the listener still removes its own marker', async () => {
   const t = setup();
   t.send(osc('state=working'));
-  await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
+  const c = await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
+  await waitPersisted(t, c);
   rmSync(t.entryFile); // pass_once: pane gone / pipe gone, concurrent with the pane's death
   t.child.stdin.end();
   expect(await t.exited).toBe(0);
@@ -242,7 +254,7 @@ test('the loop dropped the entry for a gone pane before EOF: the listener still 
 test('attach seed: a fresh listener on a session with no marker writes ready/start before any chunk', async () => {
   const t = setup();
   const c = await waitMarker(t, 'web', /^web:ready:\d+:start:%5\n$/);
-  const entry = await waitFor(() => { const e = JSON.parse(readFileSync(t.entryFile, 'utf8')); return e.lastWritten === c ? e : null; });
+  const entry = await waitPersisted(t, c);
   expect(entry.pid).toBe(t.child.pid);
   expect(entry.session).toBe('web');
   t.send(osc('state=idle'));
