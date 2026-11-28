@@ -468,15 +468,22 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   plugin checks `ctx.app.version` itself at runtime, so that one may still listen). The asset is a V2 plugin
   (`default { id, setup }`, node builtins only) that runs inside OpenCode's **one shared
   `opencode serve` per user**, which outlives every TUI and gives no per-TUI handle — so its state
-  part is an events reducer attributed by directory to the tmux sessions whose active pane
-  of the active window runs `opencode` there (two TUIs in one directory fold to one state), writes
-  the same `<session>:<state>:<epoch>:<cause>` markers, and sweeps every 15 s (deletes a marker
-  only if it still holds what this core wrote). It lists panes with `tmux -u` (as the OSC reporter
-  reads every format): a client outside tmux with a non-UTF-8 locale prints a format's tabs as `_`,
-  and the server inherits whatever locale started it. A process-wide singleton (`Symbol.for`) hands
-  over to the newest `setup` (what it wrote, and its reducer state under `STATE_VERSION` — OpenCode
-  re-runs `setup` in the same process for every new project directory), so a setup rerun upgrades
-  it live. A reject/dismiss ends the turn in
+  part is an events reducer attributed by directory to every tmux pane running `opencode` there,
+  in any window (two panes in one directory show the same state, apart from each pane's own start
+  floor; a pane listed under two grouped sessions gets one marker, under the first), writes one
+  `<session>:<state>:<epoch>:<cause>:<%pane>` marker per pane (file `<session><%pane>`, as the
+  hook), and sweeps every 15 s (deletes a marker only if it still holds what this core wrote). It
+  lists panes with `tmux -u` (as the OSC reporter reads every format): a client outside tmux with a
+  non-UTF-8 locale prints a format's tabs as `_`, and the server inherits whatever locale started
+  it. A process-wide singleton (`Symbol.for`) hands over to the newest `setup` (what it wrote, each
+  pane's `paneSince` floor, and its reducer state under `STATE_VERSION` — OpenCode re-runs `setup`
+  in the same process for every new project directory; a core taking over from one that has
+  `since` but no `paneSince`, the session-keyed version, seeds each pane's floor from its tmux
+  session's on its first sweep, and that sweep releases the old session-wide files under the same
+  content rule; `since` stays per tmux session because it is mail's floor), so a setup rerun
+  upgrades it live. A session-wide file that outlives the hand-over (OpenCode restarted instead of
+  hot-reloading) is applied by the server only to that session's agent panes with no marker of
+  their own. A reject/dismiss ends the turn in
   OpenCode (nothing stays `blocked`); ctrl+b background shells keep `working`. Acceptance test:
   `test/fixtures/opencode-event-trace.jsonl` (a real 2.2.6 recording) replayed by
   `test/opencodeAgentReplay.test.js`. Design: `docs/superpowers/specs/2026-11-07-opencode-agent-state-design.md`.
@@ -535,10 +542,16 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `~/.tmuxifier-osc/reporter.py` (stdin, nothing interpolated), skip `no python3`/`no tmux`, and
   run one sweep; always on (setup phase `osc-reporter`, job field `oscReporter`). The asset is
   stdlib python with roles `listen %N` (a `tmux pipe-pane` reader: tmux feeds pipe-pane the raw
-  bytes before its own parser, so the sequence arrives intact; folds records, writes the same
-  `<session>:<state>:<epoch>:<cause>` markers), `loop` (one resident per box under a
-  `loop.lock` flock, 2 s passes, attaches by `pane_current_command`, detaches after 3
-  non-matching passes, registry in `~/.tmuxifier-osc/panes/`, version handover on setup rerun),
+  bytes before its own parser, so the sequence arrives intact; folds its own pane's records and
+  writes that pane's `<session>:<state>:<epoch>:<cause>:<%pane>` marker, file `<session><%pane>`
+  (the session name with every byte outside `A-Za-z0-9._-` as `_`, as the hook); it never reads a
+  sibling pane, the file it owns is the one its `lastWritten` line names, and it removes that file
+  only while the content is still that line. A listener that inherits a four-field `lastWritten`
+  from an older version removes that session-wide file (under the name the older version gave it)
+  by the same rule and writes its pane's marker from the inherited records), `loop` (one resident
+  per box under a `loop.lock` flock, 2 s passes, attaches by `pane_current_command`, detaches
+  after 3 non-matching passes, registry in `~/.tmuxifier-osc/panes/`, version handover on setup
+  rerun),
   `attach %N` (the function's one-shot: default server only, and only a pane whose `pane_pipe`
   is 0, because `pipe-pane -o` on a piped pane closes the pipe; starts a loop when none holds
   `loop.lock`, so the listener is always detached again; prints nothing, exits 0) and
@@ -554,10 +567,11 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   as `node` and is not detected. Tests: `test/fixtures/osc7501-pane-trace.jsonl` replayed by
   `test/osc7501Replay.test.js` (acceptance), and `test/osc7501Tmux.integration.test.js` against a
   real, private tmux server (the only place a handover's cross-process ordering is observable;
-  the stub-tmux suites never spawn a listener; five more tests pin pre-attach catching a report
+  the stub-tmux suites never spawn a listener; seven more tests pin pre-attach catching a report
   sent at agent start, the role-started loop detaching the listener of an agent that never
-  starts, an operator's pipe left alone, a foreign-server pane refused, and the installed `agy`
-  function end to end). Design:
+  starts, an operator's pipe left alone, a foreign-server pane refused, the installed `agy`
+  function end to end, a split pane and a background-window pane each keeping their own marker,
+  and a handover migrating an older listener's session-wide marker). Design:
   `docs/superpowers/specs/2026-11-08-osc7501-pane-reporter-design.md`.
 
 ### Status and health

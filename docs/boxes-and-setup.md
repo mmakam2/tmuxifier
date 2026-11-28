@@ -232,12 +232,14 @@ already open. One caveat for mail: an OpenCode project that was open when the pl
 updated may need an OpenCode restart before it receives messages.
 
 That shared server is also why the plugin can't tell two TUIs in the same directory apart: it
-matches each OpenCode session to the tmux session whose **active pane runs `opencode` in the same
-directory**. Two TUIs started in one directory, in different tmux sessions, therefore both show
-the combined state of everything OpenCode is doing there. TUIs in different directories are
-tracked separately. When a TUI exits, its session's state is cleared within about 15 seconds. For
-messaging the same ambiguity means neither of two such TUIs receives mail; see
-[its limits](agent-messaging.md#limits-in-this-version).
+matches each OpenCode session to **every tmux pane that runs `opencode` in the same directory**.
+Each such pane is tracked on its own, a TUI in a background window too, but two TUIs started in
+one directory both show the combined state of everything OpenCode is doing there. TUIs in
+different directories are tracked separately. When a TUI exits, its pane's state is cleared within
+about 15 seconds. A box set up before per-pane state existed needs a setup rerun to get it; until
+then its OpenCode panes share one state per tmux session. For messaging the ambiguity is
+different: mail goes to one pane per tmux session, and neither of two TUIs in one directory in
+different tmux sessions receives mail; see [its limits](agent-messaging.md#limits-in-this-version).
 
 Unchecked means setup installs and refreshes nothing OpenCode-related — no CLI, no plugin, no
 messaging skill. To remove the plugin from a box: `rm ~/.config/opencode/plugins/tmuxifier-agent.js`, then stop

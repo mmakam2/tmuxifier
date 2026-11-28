@@ -106,10 +106,9 @@ permission or dismissing a question **ends the turn** in OpenCode, so the sessio
 `done` right away; nothing stays `blocked` after a "No". A shell moved to the background with ctrl+b keeps the
 session `working` until that shell exits, even though OpenCode has already ended the turn, and its
 completion starts a new turn. Every OpenCode TUI on a box talks to one shared OpenCode server, so
-the state is matched to tmux sessions by directory: two TUIs in the same directory in different
-tmux sessions show the same combined state (see
-[The OpenCode checkbox](boxes-and-setup.md#the-opencode-checkbox)). When a TUI exits, its state is
-cleared within about 15 seconds.
+the state is matched to tmux panes by directory: two TUIs in the same directory show the same
+combined state (see [The OpenCode checkbox](boxes-and-setup.md#the-opencode-checkbox)). When a TUI
+exits, its state is cleared within about 15 seconds.
 
 The state shows in several places. The sidebar badge beside each box shows its worst state
 (`blocked > done > working > idle`), with ` ×N` when several sessions carry a state and a tooltip
