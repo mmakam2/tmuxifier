@@ -37,7 +37,6 @@ class ModelsTest {
     @Test fun seriesParses() {
         val s = ApiJson.decodeFromString(seriesMapSerializer,
             """{"b1":[{"t":1723180000000,"up":true,"agent":"working","agentPresent":true}]}""")
-        assertEquals("working", s["b1"]?.last()?.agent)
         assertEquals(1723180000000L, s["b1"]?.last()?.t)
     }
     @Test fun fcmConfigParses() {

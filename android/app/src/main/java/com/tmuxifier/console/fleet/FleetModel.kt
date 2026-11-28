@@ -2,7 +2,14 @@ package com.tmuxifier.console.fleet
 
 // Pure card mapping for the fleet screen — no Android imports, JVM-tested.
 // Mirrors the web dashboard's fleet cards: a spec sheet (what the box is /
-// what it has), not live gauges, plus the agent chip that decides the sort.
+// what it has), not live gauges, plus one row per agent pane (named and ordered
+// by agent/AgentRows.kt, as the browser's sidebar does) whose worst state decides
+// the sort.
+import com.tmuxifier.console.agent.AgentRow
+import com.tmuxifier.console.agent.AgentState
+import com.tmuxifier.console.agent.agentRows
+import com.tmuxifier.console.agent.latestAgents
+import com.tmuxifier.console.agent.worstState
 import com.tmuxifier.console.api.BoxInfo
 import com.tmuxifier.console.api.BoxStatus
 import com.tmuxifier.console.api.Sample
@@ -14,8 +21,8 @@ data class BoxCard(
     val label: String,
     val sessionName: String,   // the box's configured tmux session — what the sheet opens on
     val dot: Dot,
-    val agent: String?,        // "working" | "waiting" | null
-    val agentForMin: Long?,    // whole minutes in the current agent state
+    val agents: List<AgentRow>, // one per agent pane with a state, in the browser's order
+    val worst: AgentState?,    // the most urgent of [agents]; null when there is none
     val spec1: String,         // "debian 12 · 4 cores"
     val spec2: String,         // "7.8G RAM · 11G of 38G disk"
 )
@@ -24,38 +31,26 @@ fun fleetCards(
     boxes: List<BoxInfo>,
     status: Map<String, BoxStatus>,
     series: Map<String, List<Sample>>,
-    now: Long,
 ): List<BoxCard> {
     val cards = boxes.map { box ->
         val st = status[box.id]
-        val samples = series[box.id].orEmpty()
-        val (agent, sinceT) = agentStreak(samples)
+        val agents = agentRows(latestAgents(series[box.id]))
         BoxCard(
             id = box.id,
             label = box.label.ifEmpty { box.id },
             sessionName = box.sessionName,
             dot = dotOf(st),
-            agent = agent,
-            agentForMin = if (agent != null && sinceT != null) ((now - sinceT) / 60_000).coerceAtLeast(0) else null,
+            agents = agents,
+            worst = worstState(agents),
             spec1 = spec1(st),
             spec2 = spec2(st),
         )
     }
-    // Boxes wanting the operator first, then busy ones, then the rest.
+    // Boxes wanting the operator first (blocked, done, working, idle), then the
+    // ones with no agent.
     return cards.sortedWith(
-        compareBy({ when (it.agent) { "waiting" -> 0; "working" -> 1; else -> 2 } }, { it.label.lowercase() }),
+        compareBy({ it.worst?.ordinal ?: AgentState.entries.size }, { it.label.lowercase() }),
     )
-}
-
-/** The latest agent state and the timestamp of the sample where its streak began. */
-private fun agentStreak(samples: List<Sample>): Pair<String?, Long?> {
-    val agent = samples.lastOrNull()?.agent ?: return null to null
-    var since = samples.last().t
-    for (i in samples.indices.reversed()) {
-        if (samples[i].agent != agent) break
-        since = samples[i].t
-    }
-    return agent to since
 }
 
 private fun dotOf(st: BoxStatus?): Dot = when {

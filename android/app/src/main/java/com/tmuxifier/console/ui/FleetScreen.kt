@@ -1,11 +1,13 @@
 package com.tmuxifier.console.ui
 
-// Home: box cards, waiting agents on top. Polls every 10s while STARTED —
-// repeatOnLifecycle cancels the loop in background (push covers it; the spec
-// forbids background polling).
+// Home: box cards, blocked agents on top; each card lists its agent panes, one row
+// per pane with its state (fleet/FleetModel.kt names and orders them). Polls every
+// 10s while STARTED — repeatOnLifecycle cancels the loop in background (push
+// covers it; the spec forbids background polling).
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,10 +36,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tmuxifier.console.R
 import androidx.lifecycle.Lifecycle
@@ -45,6 +50,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.tmuxifier.console.AppState
 import com.tmuxifier.console.Screen
+import com.tmuxifier.console.agent.AgentRow
 import com.tmuxifier.console.api.ApiException
 import com.tmuxifier.console.api.BoxStatus
 import com.tmuxifier.console.fleet.BoxCard
@@ -98,7 +104,7 @@ fun FleetScreen(
                         // failure on one endpoint can never leave statuses ahead
                         // of cards from different poll cycles.
                         statuses = st
-                        cards = fleetCards(bx, st, se, System.currentTimeMillis())
+                        cards = fleetCards(bx, st, se)
                     }
                     loaded = true
                     offline = false
@@ -185,25 +191,49 @@ private fun BoxCardRow(card: BoxCard, onClick: () -> Unit, onLongClick: () -> Un
             },
         ),
     ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).background(dotColor(card.dot), CircleShape))
-            Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                Text(card.label, style = MaterialTheme.typography.titleMedium)
-                Text(card.spec1, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(card.spec2, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(10.dp).background(dotColor(card.dot), CircleShape))
+                Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                    Text(card.label, style = MaterialTheme.typography.titleMedium)
+                    Text(card.spec1, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(card.spec2, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-            card.agent?.let { agent ->
-                val mins = card.agentForMin
-                val label = if (agent == "waiting" && mins != null && mins > 0) "waiting ${mins}m" else agent
-                val bg = if (agent == "waiting") Color(0x33FFB300) else Color(0x334CAF50)
-                val fg = if (agent == "waiting") Color(0xFFFFB300) else Color(0xFF4CAF50)
-                Text(
-                    label,
-                    color = fg,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.background(bg, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
-                )
+            if (card.agents.isNotEmpty()) {
+                // Indented under the label, a 1 dp guide down its left edge.
+                val guide = MaterialTheme.colorScheme.outlineVariant
+                Column(
+                    Modifier
+                        .padding(start = 20.dp, top = 8.dp)
+                        .drawBehind { drawRect(guide, size = Size(1.dp.toPx(), size.height)) }
+                        .padding(start = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    card.agents.forEach { AgentRowLine(it) }
+                }
             }
         }
+    }
+}
+
+// One agent pane: its name, then its state chip. A row with no onClick draws no
+// click target, so a tap on it reaches the card behind it.
+@Composable
+private fun AgentRowLine(row: AgentRow, enabled: Boolean = true, onClick: (() -> Unit)? = null) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            row.name,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        AgentChip(row.state, row.cause, Modifier.padding(start = 8.dp))
     }
 }

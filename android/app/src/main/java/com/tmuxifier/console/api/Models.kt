@@ -92,7 +92,6 @@ data class Sample(
     val t: Long,
     val up: Boolean,
     val stopped: Boolean? = null,
-    val agent: String? = null,
     val agents: Map<String, AgentEntry> = emptyMap(),
     val cpuPct: Int? = null,
     val memPct: Int? = null,
