@@ -104,13 +104,19 @@ fun SessionScreen(
     boxId: String,
     boxLabel: String,
     onUnauthorized: () -> Unit,
+    // A line to open with, in the four-second error line below: why a jump to an
+    // agent pane did not land (MainActivity's openAgent). Plain text.
+    notice: String? = null,
     bottomBar: @Composable () -> Unit = {},
 ) {
     val client = state.client() ?: return
-    var snap by remember { mutableStateOf<PaneSnapshot?>(null) }
-    var lines by remember { mutableStateOf<List<List<Span>>>(emptyList()) }
-    var reconnecting by remember { mutableStateOf(false) }
-    var sendError by remember { mutableStateOf<String?>(null) }
+    // The capture is per box: this screen can be handed another box in place (a
+    // jump, a notification), and the previous box's chip and screen must not stay
+    // drawn until the new box's first capture lands, or stay at all if it fails.
+    var snap by remember(boxId) { mutableStateOf<PaneSnapshot?>(null) }
+    var lines by remember(boxId) { mutableStateOf<List<List<Span>>>(emptyList()) }
+    var reconnecting by remember(boxId) { mutableStateOf(false) }
+    var sendError by remember(boxId, notice) { mutableStateOf(notice) }
     var draft by remember(boxId) { mutableStateOf(state.prefs.draft(boxId)) }
     var sending by remember { mutableStateOf(false) }
     var fontSize by remember { mutableFloatStateOf(state.prefs.fontSize) }

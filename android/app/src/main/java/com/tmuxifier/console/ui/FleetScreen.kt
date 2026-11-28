@@ -1,7 +1,8 @@
 package com.tmuxifier.console.ui
 
 // Home: box cards, blocked agents on top; each card lists its agent panes, one row
-// per pane with its state (fleet/FleetModel.kt names and orders them). Polls every
+// per pane with its state (fleet/FleetModel.kt names and orders them); a row tap
+// opens that agent (MainActivity's openAgent runs the jump). Polls every
 // 10s while STARTED — repeatOnLifecycle cancels the loop in background (push
 // covers it; the spec forbids background polling).
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -51,6 +52,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.tmuxifier.console.AppState
 import com.tmuxifier.console.Screen
 import com.tmuxifier.console.agent.AgentRow
+import com.tmuxifier.console.agent.JumpTarget
 import com.tmuxifier.console.api.ApiException
 import com.tmuxifier.console.api.BoxStatus
 import com.tmuxifier.console.fleet.BoxCard
@@ -72,6 +74,8 @@ private fun dotColor(d: Dot): Color = when (d) {
 fun FleetScreen(
     state: AppState,
     onOpen: (Screen.Session) -> Unit,
+    onOpenAgent: (boxId: String, label: String, configuredSession: String, target: JumpTarget) -> Unit,
+    opening: Boolean,
     onSettings: () -> Unit,
     onUnauthorized: () -> Unit,
 ) {
@@ -136,7 +140,15 @@ fun FleetScreen(
             )
             IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
         }
-        if (offline) {
+        if (opening) {
+            // A row's jump is in flight: its rows take no second tap until it lands.
+            Text(
+                "opening…",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        } else if (offline) {
             Text(
                 "offline — retrying",
                 color = MaterialTheme.colorScheme.error,
@@ -157,6 +169,11 @@ fun FleetScreen(
                     card,
                     onClick = { onOpen(Screen.Session(card.id, card.label)) },
                     onLongClick = { sheetForId = card.id },
+                    opening = opening,
+                    // The row's ids came through agentRows, which validated them.
+                    onOpenAgent = { row ->
+                        onOpenAgent(card.id, card.label, card.sessionName, JumpTarget(row.session, row.windowId, row.pane))
+                    },
                 )
             }
         }
@@ -178,7 +195,13 @@ fun FleetScreen(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun BoxCardRow(card: BoxCard, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun BoxCardRow(
+    card: BoxCard,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    opening: Boolean,
+    onOpenAgent: (AgentRow) -> Unit,
+) {
     val haptic = LocalHapticFeedback.current
     Surface(
         shape = RoundedCornerShape(10.dp),
@@ -210,7 +233,9 @@ private fun BoxCardRow(card: BoxCard, onClick: () -> Unit, onLongClick: () -> Un
                         .padding(start = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    card.agents.forEach { AgentRowLine(it) }
+                    card.agents.forEach { row ->
+                        AgentRowLine(row, enabled = !opening, onClick = { onOpenAgent(row) })
+                    }
                 }
             }
         }

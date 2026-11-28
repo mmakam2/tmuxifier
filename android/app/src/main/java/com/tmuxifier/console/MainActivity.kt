@@ -21,11 +21,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.google.firebase.messaging.FirebaseMessaging
+import com.tmuxifier.console.agent.JumpTarget
+import com.tmuxifier.console.agent.planJump
+import com.tmuxifier.console.agent.runJump
+import com.tmuxifier.console.api.ApiException
 import com.tmuxifier.console.push.initFirebase
 import com.tmuxifier.console.ui.FleetScreen
 import com.tmuxifier.console.ui.SessionScreen
@@ -154,10 +160,47 @@ private fun Shell(
     var screen by rememberSaveable(stateSaver = ScreenSaver) {
         mutableStateOf(if (state.enrolled) Screen.Fleet else Screen.Settings)
     }
+    // A jump to one agent pane in flight (one at a time), and the line the session
+    // screen shows for four seconds when it did not land.
+    var jumping by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // Take the operator to one agent pane: repoint the box when the pane is in
+    // another session, select its window and pane, then open the session screen.
+    // The screen opens after a failure too (the operator asked for this box), with
+    // the reason as its notice. Nothing is rolled back: a repoint that succeeded
+    // before the select failed leaves the box on the target's session, which is
+    // what the opened screen then shows. A 401 from any step is the revoked-device
+    // path, as everywhere else.
+    fun openAgent(boxId: String, label: String, configuredSession: String, target: JumpTarget) {
+        val client = state.client() ?: return
+        if (jumping) return                       // one jump at a time; a second tap is dropped
+        jumping = true
+        scope.launch {
+            try {
+                val failed = runJump(
+                    planJump(configuredSession, target),
+                    setSession = { client.setSession(boxId, it) },
+                    selectPane = { s, w, p -> client.selectWindow(boxId, s, w, p) },
+                )
+                notice = failed?.let { "agent not selected: $it" }
+                screen = Screen.Session(boxId, label) // also after a failure: the operator asked for this box
+            } catch (e: ApiException) {               // runJump rethrows only a 401
+                screen = Screen.Settings
+            } finally {
+                jumping = false
+            }
+        }
+    }
+
     // Notification tap-through: an agent-input push opens that box's session.
     LaunchedEffect(pendingBox.value) {
         val boxId = pendingBox.value ?: return@LaunchedEffect
-        if (state.enrolled) screen = Screen.Session(boxId, boxId)
+        if (state.enrolled) {
+            notice = null // a notice left from an earlier jump is not about this open
+            screen = Screen.Session(boxId, boxId)
+        }
         pendingBox.value = null
     }
     BackHandler(enabled = state.enrolled && screen != Screen.Fleet) { screen = Screen.Fleet }
@@ -172,7 +215,9 @@ private fun Shell(
         )
         Screen.Fleet -> FleetScreen(
             state,
-            onOpen = { screen = it },
+            onOpen = { notice = null; screen = it },
+            onOpenAgent = ::openAgent,
+            opening = jumping,
             onSettings = { screen = Screen.Settings },
             onUnauthorized = { screen = Screen.Settings },
         )
@@ -183,6 +228,7 @@ private fun Shell(
                 boxId = s.boxId,
                 boxLabel = s.boxLabel,
                 onUnauthorized = { screen = Screen.Settings },
+                notice = notice,
             )
         }
     }
