@@ -23,7 +23,7 @@ const PANES = parsePanes(
   'octest2\t1\t1\topencode\t/home/user/proj\t%2\n' +
   'octest3\t1\t1\topencode\t/home/user/proj2\t%3\n',
 );
-const SINCE = new Map([['octest', 0], ['octest2', 0], ['octest3', 0]]);
+const SINCE = new Map([['%1', 0], ['%2', 0], ['%3', 0]]);
 const END_RE = /^session\.execution\.(succeeded|interrupted|failed)$/;
 
 test('the recorded OpenCode trace drives the per-pane markers through every scenario', () => {
@@ -51,13 +51,14 @@ test('the recorded OpenCode trace drives the per-pane markers through every scen
   expect(trail).toHaveLength(427);
 
   const sc = (f) => `${f.state}/${f.cause}`;
+  const st = ({ state, cause, ts }) => ({ state, cause, ts });
   const trailOf = (name) => (n) => sc(trail[n - 1].fold.get(name));
-  const at = trailOf('octest');
-  const trail2 = trailOf('octest2');
-  const trail3 = trailOf('octest3');
+  const at = trailOf('%1');
+  const trail2 = trailOf('%2');
+  const trail3 = trailOf('%3');
   if (process.env.REPLAY_TRAIL) {
     for (const t of trail) {
-      console.log(`${t.n}\t${t.kind === 'event' ? t.type : t.kind}\t${sc(t.fold.get('octest'))}\t${sc(t.fold.get('octest2'))}\t${sc(t.fold.get('octest3'))}`);
+      console.log(`${t.n}\t${t.kind === 'event' ? t.type : t.kind}\t${sc(t.fold.get('%1'))}\t${sc(t.fold.get('%2'))}\t${sc(t.fold.get('%3'))}`);
     }
   }
 
@@ -85,20 +86,20 @@ test('the recorded OpenCode trace drives the per-pane markers through every scen
   // (k) the same-pid setup for proj2 at 316 is a hand-over: everything known
   // about proj survives it, so octest keeps its finished turn from 313.
   expect(setups).toEqual([{ n: 1, samePid: false }, { n: 316, samePid: true }, { n: 403, samePid: false }]);
-  expect(at(316)).toBe('ready/stop'); expect(trail[315].fold.get('octest').ts).toBe(Math.floor(trail[312].created / 1000));
+  expect(at(316)).toBe('ready/stop'); expect(trail[315].fold.get('%1').ts).toBe(Math.floor(trail[312].created / 1000));
   // (k)/(l) a second session in proj folds into both proj panes; proj2 has none.
   expect(trail2(343)).toBe('working/prompt'); expect(at(343)).toBe('working/prompt'); expect(trail3(343)).toBe('ready/start');
   expect(at(344)).toBe(at(343)); // duplicate changes nothing
   // The second session's session.created (336) must not hide octest's finished turn from 313.
   for (let n = 313; n <= 342; n++) expect(at(n), `line ${n}`).toBe('ready/stop');
-  expect(trail[341].fold.get('octest').ts).toBe(Math.floor(trail[312].created / 1000));
+  expect(trail[341].fold.get('%1').ts).toBe(Math.floor(trail[312].created / 1000));
   // (q) `opencode -c` in a fresh server: no session.created, directory learned at 415.
   expect(at(416)).toBe('working/prompt'); expect(at(426)).toBe('ready/stop');
 
   // The two proj panes always show the same fold; proj2 never sees a session.
   for (const t of trail) {
-    expect(t.fold.get('octest2'), `line ${t.n}`).toEqual(t.fold.get('octest'));
-    expect(t.fold.get('octest3'), `line ${t.n}`).toEqual({ state: 'ready', cause: 'start', ts: 0 });
+    expect(st(t.fold.get('%2')), `line ${t.n}`).toEqual(st(t.fold.get('%1')));
+    expect(t.fold.get('%3'), `line ${t.n}`).toEqual({ session: 'octest3', state: 'ready', cause: 'start', ts: 0 });
   }
   // Before the first session exists, and after the server restart until the
   // resumed session's first turn, the proj panes read ready/start.
@@ -106,8 +107,8 @@ test('the recorded OpenCode trace drives the per-pane markers through every scen
 
   // The marker ts at 46 equals the execution.succeeded created time in seconds.
   expect(trail[45].type).toBe('session.execution.succeeded');
-  expect(trail[45].fold.get('octest').ts).toBe(Math.floor(trail[45].created / 1000));
-  expect(markerLine('octest', trail[45].fold.get('octest'))).toBe(`octest:ready:${Math.floor(trail[45].created / 1000)}:stop\n`);
+  expect(trail[45].fold.get('%1').ts).toBe(Math.floor(trail[45].created / 1000));
+  expect(markerLine('octest', trail[45].fold.get('%1'), '%1')).toBe(`octest:ready:${Math.floor(trail[45].created / 1000)}:stop:%1\n`);
 
   // No execution.succeeded|interrupted|failed line ever leaves octest blocked.
   const ends = trail.filter((t) => t.kind === 'event' && END_RE.test(t.type));

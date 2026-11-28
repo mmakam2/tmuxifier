@@ -105,13 +105,14 @@ test('the asset imports under plain Node with no side effects and exports the V2
 
 test('sweep writes ready/start for a fresh opencode pane and nothing for a claude pane', async () => {
   const { core, home, state } = await rig();
-  state.panes = row('web', 'opencode', '/home/user/proj') + row('dev', 'claude', '/x');
+  state.panes = row('web', 'opencode', '/home/user/proj') + row('dev', 'claude', '/x', '1', '1', '%2');
   await core.sweep();
-  expect(read(home, 'web')).toBe('web:ready:998:start\n');
-  expect(existsSync(marker(home, 'dev'))).toBe(false);
-  expect(readdirSync(markerDir(home))).toEqual(['web']); // no temp file left behind
-  expect(core.written.get('web')).toBe('web:ready:998:start\n');
+  expect(read(home, 'web%1')).toBe('web:ready:998:start:%1\n');
+  expect(existsSync(marker(home, 'dev%2'))).toBe(false);
+  expect(readdirSync(markerDir(home))).toEqual(['web%1']); // no temp file left behind
+  expect(core.written.get('web%1')).toBe('web:ready:998:start:%1\n');
   expect(core.since.get('web')).toBe(998);
+  expect(core.paneSince.get('%1')).toBe(998);
 });
 
 test('a state change rewrites the marker atomically with the session\'s ts; an unchanged fold does not rewrite', async () => {
@@ -119,47 +120,47 @@ test('a state change rewrites the marker atomically with the session\'s ts; an u
   state.t = 1794098600; // the pane appeared before the recorded session
   state.panes = row('web', 'opencode', '/home/user/proj');
   await core.sweep();
-  const first = statSync(marker(home, 'web'));
+  const first = statSync(marker(home, 'web%1'));
   for (const n of [15, 16, 17, 18]) {
     const e = traceEvent(n);
     if (e) await core.handle(e);
   }
-  expect(read(home, 'web')).toBe('web:working:1794098652:prompt\n');
-  const second = statSync(marker(home, 'web'));
+  expect(read(home, 'web%1')).toBe('web:working:1794098652:prompt:%1\n');
+  const second = statSync(marker(home, 'web%1'));
   expect(second.ino).not.toBe(first.ino); // a fresh file renamed into place, not an in-place edit
   expect((second.mode & 0o777).toString(8)).toBe((0o644 & ~process.umask()).toString(8));
   await flush(20);
   state.t += 60;
   await core.sweep();
-  const third = statSync(marker(home, 'web'));
+  const third = statSync(marker(home, 'web%1'));
   expect(third.ino).toBe(second.ino);
   expect(third.mtimeMs).toBe(second.mtimeMs);
-  expect(readdirSync(markerDir(home))).toEqual(['web']);
+  expect(readdirSync(markerDir(home))).toEqual(['web%1']);
 });
 
 test('a tmux session whose pane stopped being opencode gets its marker deleted only if the content is still ours', async () => {
   const { core, home, state } = await rig();
   state.panes = row('web', 'opencode', '/home/user/proj');
   await core.sweep();
-  writeFileSync(marker(home, 'web'), 'web:blocked:1:permission\n'); // the Claude hook took over
+  writeFileSync(marker(home, 'web%1'), 'web:blocked:1:permission:%1\n'); // the Claude hook took over
   state.panes = row('web', 'zsh', '/home/user/proj');
   await core.sweep();
-  expect(read(home, 'web')).toBe('web:blocked:1:permission\n');
-  expect(core.written.has('web')).toBe(false);
+  expect(read(home, 'web%1')).toBe('web:blocked:1:permission:%1\n');
+  expect(core.written.has('web%1')).toBe(false);
 
   const b = await rig();
   b.state.panes = row('web', 'opencode', '/home/user/proj');
   await b.core.sweep();
   b.state.panes = row('web', 'zsh', '/home/user/proj');
   await b.core.sweep();
-  expect(existsSync(marker(b.home, 'web'))).toBe(false);
-  expect(b.core.written.has('web')).toBe(false);
+  expect(existsSync(marker(b.home, 'web%1'))).toBe(false);
+  expect(b.core.written.has('web%1')).toBe(false);
   // A killed tmux session (gone from the listing) is deleted the same way.
   b.state.panes = row('web', 'opencode', '/home/user/proj');
   await b.core.sweep();
   b.state.panes = '';
   await b.core.sweep();
-  expect(existsSync(marker(b.home, 'web'))).toBe(false);
+  expect(existsSync(marker(b.home, 'web%1'))).toBe(false);
 });
 
 test('listPanes failing (null), hanging past the timeout, or returning garbage leaves no marker and no throw', async () => {
@@ -194,8 +195,9 @@ test('listPanes failing (null), hanging past the timeout, or returning garbage l
   await r.core.sweep();
   r.state.panes = null;
   await r.core.sweep();
-  expect(read(r.home, 'web')).toBe('web:ready:998:start\n');
+  expect(read(r.home, 'web%1')).toBe('web:ready:998:start:%1\n');
   expect(r.core.since.get('web')).toBe(998);
+  expect(r.core.paneSince.get('%1')).toBe(998);
 
   // An unwritable HOME (a regular file) swallows the fs error.
   const file = path.join(tmp(), 'not-a-dir');
@@ -203,7 +205,7 @@ test('listPanes failing (null), hanging past the timeout, or returning garbage l
   const f = await rig({ home: file });
   f.state.panes = row('web', 'opencode', '/p');
   await expect(f.core.sweep()).resolves.toBeUndefined();
-  expect(f.core.written.has('web')).toBe(false); // a failed write is retried next sweep
+  expect(f.core.written.has('web%1')).toBe(false); // a failed write is retried next sweep
 
   expect(err).not.toHaveBeenCalled();
   expect(log).not.toHaveBeenCalled();
@@ -348,14 +350,15 @@ test('since: a session finished before the pane appeared reads ready/start; a ne
   state.panes = row('web', 'opencode', '/proj');
   await core.sweep();
   expect(core.since.get('web')).toBe(130); // the last listing without the pane
-  expect(read(home, 'web')).toBe('web:ready:130:start\n');
+  expect(core.paneSince.get('%1')).toBe(130);
+  expect(read(home, 'web%1')).toBe('web:ready:130:start:%1\n');
   await core.handle(ev('session.execution.started', 600, { sessionID: 'ses_a' }));
-  expect(read(home, 'web')).toBe('web:working:600:prompt\n');
+  expect(read(home, 'web%1')).toBe('web:working:600:prompt:%1\n');
   await core.handle(ev('session.execution.succeeded', 650, { sessionID: 'ses_a' }));
-  expect(read(home, 'web')).toBe('web:ready:650:stop\n');
+  expect(read(home, 'web%1')).toBe('web:ready:650:stop:%1\n');
 });
 
-test('since tracks hosting: a window switch keeps since and deletes the marker; switching back shows a block raised before', async () => {
+test('a window switch keeps the marker: an opencode pane in a background window still has its state', async () => {
   const { core, home, state } = await rig();
   await core.handle(ev('session.created', 900, { sessionID: 'ses_a' }, '/proj'));
   state.t = 1000;
@@ -363,21 +366,24 @@ test('since tracks hosting: a window switch keeps since and deletes the marker; 
   await core.sweep();
   await core.handle(ev('session.execution.started', 1100, { sessionID: 'ses_a' }));
   await core.handle(ev('permission.asked', 1200, { id: 'per_1', sessionID: 'ses_a' }, '/proj'));
-  expect(read(home, 'web')).toBe('web:blocked:1200:permission\n');
+  expect(read(home, 'web%1')).toBe('web:blocked:1200:permission:%1\n');
 
   // Switch to a zsh window: the opencode pane is still there, in a background window.
   state.t = 1300;
-  state.panes = row('web', 'opencode', '/proj', '0', '1') + row('web', 'zsh', '/proj', '1', '1');
+  state.panes = row('web', 'opencode', '/proj', '0', '1') + row('web', 'zsh', '/proj', '1', '1', '%2');
   await core.sweep();
-  expect(existsSync(marker(home, 'web'))).toBe(false);
+  expect(read(home, 'web%1')).toBe('web:blocked:1200:permission:%1\n');
+  expect(existsSync(marker(home, 'web%2'))).toBe(false); // the zsh pane has no marker
   expect(core.since.get('web')).toBe(1000);
+  expect(core.paneSince.get('%1')).toBe(1000);
 
   // Back to the OpenCode window much later: same since, the block is still a candidate.
   state.t = 5000;
-  state.panes = row('web', 'opencode', '/proj', '1', '1') + row('web', 'zsh', '/proj', '0', '1');
+  state.panes = row('web', 'opencode', '/proj', '1', '1') + row('web', 'zsh', '/proj', '0', '1', '%2');
   await core.sweep();
   expect(core.since.get('web')).toBe(1000);
-  expect(read(home, 'web')).toBe('web:blocked:1200:permission\n');
+  expect(core.paneSince.get('%1')).toBe(1000);
+  expect(read(home, 'web%1')).toBe('web:blocked:1200:permission:%1\n');
 });
 
 test('since tracks hosting: a TUI exit removes since, so a relaunch excludes the old finished sessions', async () => {
@@ -388,29 +394,86 @@ test('since tracks hosting: a TUI exit removes since, so a relaunch excludes the
   await core.sweep();
   await core.handle(ev('session.execution.started', 1100, { sessionID: 'ses_a' }));
   await core.handle(ev('session.execution.succeeded', 1200, { sessionID: 'ses_a' }));
-  expect(read(home, 'web')).toBe('web:ready:1200:stop\n');
+  expect(read(home, 'web%1')).toBe('web:ready:1200:stop:%1\n');
 
   state.t = 1300;
   state.panes = row('web', 'zsh', '/proj'); // no opencode pane anywhere in web
   await core.sweep();
   expect(core.since.has('web')).toBe(false);
-  expect(existsSync(marker(home, 'web'))).toBe(false);
+  expect(core.paneSince.has('%1')).toBe(false);
+  expect(existsSync(marker(home, 'web%1'))).toBe(false);
 
   state.t = 2000;
   state.panes = row('web', 'opencode', '/proj');
   await core.sweep();
   expect(core.since.get('web')).toBe(1300); // the previous listing, the last one without opencode
-  expect(read(home, 'web')).toBe('web:ready:1300:start\n');
+  expect(core.paneSince.get('%1')).toBe(1300);
+  expect(read(home, 'web%1')).toBe('web:ready:1300:start:%1\n');
 });
 
 test('session names are sanitized in the filename but exact in the content', async () => {
   const { core, home, state } = await rig();
-  state.panes = row('my session/x', 'opencode', '/p') + row('..', 'opencode', '/p');
+  state.panes = row('my session/x', 'opencode', '/p') + row('..', 'opencode', '/p', '1', '1', '%2');
   await core.sweep();
-  expect(readFileSync(marker(home, 'my_session_x'), 'utf8')).toBe('my session/x:ready:998:start\n');
-  expect(readdirSync(markerDir(home))).toEqual(['my_session_x']); // `..` never escapes the directory
+  expect(readFileSync(marker(home, 'my_session_x%1'), 'utf8')).toBe('my session/x:ready:998:start:%1\n');
+  expect(readdirSync(markerDir(home))).toEqual(['my_session_x%1']); // `..` never escapes the directory
   const { safeName } = await import(ASSET);
   expect(safeName('a b/c:d.e-f_g')).toBe('a_b_c_d.e-f_g');
+});
+
+test('two opencode panes of one tmux session get one marker each; the one that goes back to a shell loses only its own', async () => {
+  const { core, home, state } = await rig();
+  await core.handle(ev('session.created', 900, { sessionID: 'ses_a' }, '/proj'));
+  await core.handle(ev('session.created', 900, { sessionID: 'ses_b' }, '/other'));
+  state.t = 1000;
+  state.panes = row('web', 'opencode', '/proj', '1', '1', '%1') + row('web', 'opencode', '/other', '0', '1', '%2');
+  await core.sweep();
+  await core.handle(ev('session.execution.started', 1100, { sessionID: 'ses_a' }));
+  await core.handle(ev('session.execution.started', 1150, { sessionID: 'ses_b' }));
+  await core.handle(ev('permission.asked', 1200, { id: 'per_1', sessionID: 'ses_b' }, '/other'));
+  expect(read(home, 'web%1')).toBe('web:working:1100:prompt:%1\n');
+  expect(read(home, 'web%2')).toBe('web:blocked:1200:permission:%2\n');
+  expect(readdirSync(markerDir(home)).sort()).toEqual(['web%1', 'web%2']);
+  expect([...core.paneSince]).toEqual([['%1', 1000], ['%2', 1000]]);
+  expect([...core.since]).toEqual([['web', 1000]]);
+
+  state.t = 1300;
+  state.panes = row('web', 'opencode', '/proj', '1', '1', '%1') + row('web', 'zsh', '/other', '0', '1', '%2');
+  await core.sweep();
+  expect(existsSync(marker(home, 'web%2'))).toBe(false);
+  expect(read(home, 'web%1')).toBe('web:working:1100:prompt:%1\n');
+  expect(core.paneSince.has('%2')).toBe(false);
+  expect(core.since.get('web')).toBe(1000); // the session still hosts opencode: mail's floor does not move
+});
+
+test('a pane moved to another tmux session keeps its since; the marker follows and the old file is released', async () => {
+  const { core, home, state } = await rig();
+  await core.handle(ev('session.created', 900, { sessionID: 'ses_a' }, '/proj'));
+  state.t = 1000;
+  state.panes = row('web', 'opencode', '/proj', '1', '1', '%4');
+  await core.sweep();
+  await core.handle(ev('session.execution.started', 1100, { sessionID: 'ses_a' }));
+  await core.handle(ev('session.execution.succeeded', 1200, { sessionID: 'ses_a' }));
+  expect(read(home, 'web%4')).toBe('web:ready:1200:stop:%4\n');
+
+  state.t = 5000;
+  state.panes = row('dev', 'opencode', '/proj', '1', '1', '%4');
+  await core.sweep();
+  expect(existsSync(marker(home, 'web%4'))).toBe(false);
+  expect(read(home, 'dev%4')).toBe('dev:ready:1200:stop:%4\n'); // the finished turn is not lost to a new floor
+  expect(core.paneSince.get('%4')).toBe(1000);
+  expect([...core.written.keys()]).toEqual(['dev%4']);
+});
+
+test('one pane listed under two grouped sessions gets one marker, under the first listed, and it does not flap', async () => {
+  const { core, home, state } = await rig();
+  state.panes = row('alpha', 'opencode', '/proj', '1', '1', '%3') + row('beta', 'opencode', '/proj', '1', '1', '%3');
+  await core.sweep();
+  expect(readdirSync(markerDir(home))).toEqual(['alpha%3']);
+  const first = statSync(marker(home, 'alpha%3'));
+  state.t += 60;
+  await core.sweep();
+  expect(statSync(marker(home, 'alpha%3')).ino).toBe(first.ino);
 });
 
 test('safeName sanitises byte-wise, exactly like the sh hook\'s tr -c', async () => {
@@ -434,7 +497,8 @@ test('since is the previous listing\'s time, so a slow listing never excludes th
   slow = true; // this listing takes 2 s
   await core.sweep();
   expect(core.since.get('web')).toBe(1000);
-  expect(read(home, 'web')).toBe('web:working:1100:prompt\n');
+  expect(core.paneSince.get('%1')).toBe(1000);
+  expect(read(home, 'web%1')).toBe('web:working:1100:prompt:%1\n');
 
   // A core's very first sweep has no previous listing: its pre-listing time - 2.
   const f = await rig({ listPanes: async () => { f.state.t += 2; return f.state.panes; } });
@@ -444,7 +508,8 @@ test('since is the previous listing\'s time, so a slow listing never excludes th
   f.state.panes = row('web', 'opencode', '/proj');
   await f.core.sweep();
   expect(f.core.since.get('web')).toBe(1098);
-  expect(read(f.home, 'web')).toBe('web:working:1099:prompt\n');
+  expect(f.core.paneSince.get('%1')).toBe(1098);
+  expect(read(f.home, 'web%1')).toBe('web:working:1099:prompt:%1\n');
 });
 
 test('state changes coalesce: one sweep in flight, at most one rerun after it; an unchanged state sweeps nothing', async () => {
@@ -464,7 +529,7 @@ test('state changes coalesce: one sweep in flight, at most one rerun after it; a
   release();
   await Promise.all([p1, p2, p3]);
   expect(calls).toBe(2);
-  expect(read(home, 'web')).toBe('web:working:1300:unblock\n');
+  expect(read(home, 'web%1')).toBe('web:working:1300:unblock:%1\n');
   // An event that changes no state starts no sweep.
   await core.handle(ev('session.step.started', 1400, { sessionID: 'ses_a' }));
   expect(calls).toBe(2);
@@ -482,7 +547,7 @@ test('abort stops the timer and the subscription, keeps the markers, and an in-f
   const ctx = fakeCtx();
   const done = core.attach(ctx);
   await flush();
-  expect(read(home, 'web')).toBe('web:ready:998:start\n');
+  expect(read(home, 'web%1')).toBe('web:ready:998:start:%1\n');
   expect(timers).toHaveLength(1);
   expect(timers[0].ms).toBe(15000);
 
@@ -497,11 +562,11 @@ test('abort stops the timer and the subscription, keeps the markers, and an in-f
   await done; // the event loop ended
   expect(ctx.signal.aborted).toBe(true);
   expect(cleared).toEqual([timers[0]]);
-  expect(read(home, 'web')).toBe('web:ready:998:start\n'); // abort never deletes
+  expect(read(home, 'web%1')).toBe('web:ready:998:start:%1\n'); // abort never deletes
   await core.sweep();
   ctx.push(ev('session.created', 2000, { sessionID: 'ses_z' }, '/proj'));
   await flush();
-  expect(read(home, 'web')).toBe('web:ready:998:start\n');
+  expect(read(home, 'web%1')).toBe('web:ready:998:start:%1\n');
 });
 
 test('the sweep timer is unref\'d so the plugin never keeps the server alive', async () => {
@@ -518,7 +583,7 @@ test('the sweep timer is unref\'d so the plugin never keeps the server alive', a
   state.panes = row('web', 'zsh', '/proj');
   tick();
   await flush();
-  expect(existsSync(marker(home, 'web'))).toBe(false);
+  expect(existsSync(marker(home, 'web%1'))).toBe(false);
   core.abort();
 });
 
@@ -536,9 +601,9 @@ test('setup twice hands over: the second core inherits written/since, the first 
   const ctx1 = fakeCtx();
   const cleanup1 = await mod.default.setup(ctx1);
   const core1 = globalThis[KEY];
-  await vi.waitFor(() => expect(existsSync(marker(env.home, 'web'))).toBe(true));
-  const first = statSync(marker(env.home, 'web'));
-  expect(read(env.home, 'web')).toMatch(/^web:ready:\d+:start\n$/);
+  await vi.waitFor(() => expect(existsSync(marker(env.home, 'web%1'))).toBe(true));
+  const first = statSync(marker(env.home, 'web%1'));
+  expect(read(env.home, 'web%1')).toMatch(/^web:ready:\d+:start:%1\n$/);
 
   const ctx2 = fakeCtx();
   const cleanup2 = await mod.default.setup(ctx2);
@@ -546,26 +611,27 @@ test('setup twice hands over: the second core inherits written/since, the first 
   expect(core2).not.toBe(core1);
   expect(core2.written).toBe(core1.written);
   expect(core2.since).toBe(core1.since);
+  expect(core2.paneSince).toBe(core1.paneSince);
   expect(ctx1.signal.aborted).toBe(true);
   expect(ctx2.signal.aborted).toBe(false);
   expect(stopped).toEqual([started[0]]);
   await flush(100);
-  expect(statSync(marker(env.home, 'web')).ino).toBe(first.ino); // inherited memory: no rewrite
+  expect(statSync(marker(env.home, 'web%1')).ino).toBe(first.ino); // inherited memory: no rewrite
 
   // The aborted subscription is gone: its events go nowhere.
   ctx1.push(ev('session.created', null, { sessionID: 'ses_a' }, '/proj'));
   ctx1.push(ev('session.execution.started', null, { sessionID: 'ses_a' }));
   await flush(100);
-  expect(read(env.home, 'web')).toMatch(/:start\n$/);
+  expect(read(env.home, 'web%1')).toMatch(/:start:%1\n$/);
   ctx2.push(ev('session.created', null, { sessionID: 'ses_b' }, '/proj'));
   ctx2.push(ev('session.execution.started', null, { sessionID: 'ses_b' }));
-  await vi.waitFor(() => expect(read(env.home, 'web')).toMatch(/^web:working:\d+:prompt\n$/));
+  await vi.waitFor(() => expect(read(env.home, 'web%1')).toMatch(/^web:working:\d+:prompt:%1\n$/));
 
   await cleanup1();
-  expect(existsSync(marker(env.home, 'web'))).toBe(true);
+  expect(existsSync(marker(env.home, 'web%1'))).toBe(true);
   expect(globalThis[KEY]).toBe(core2);
   await cleanup2();
-  expect(existsSync(marker(env.home, 'web'))).toBe(false);
+  expect(existsSync(marker(env.home, 'web%1'))).toBe(false);
   expect(globalThis[KEY]).toBeUndefined();
   expect(ctx2.signal.aborted).toBe(true);
   expect(stopped).toEqual([started[0], started[1]]);
@@ -677,7 +743,7 @@ test('a block raised in one directory survives a setup for another directory in 
   ctx1.push(ev('session.created', T, { sessionID: 'ses_a' }, '/proj'));
   ctx1.push(ev('session.execution.started', T + 1, { sessionID: 'ses_a' }));
   ctx1.push(ev('permission.asked', T + 2, { id: 'per_1', sessionID: 'ses_a' }, '/proj'));
-  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:blocked:${T + 2}:permission\n`));
+  await vi.waitFor(() => expect(read(env.home, 'web%1')).toBe(`web:blocked:${T + 2}:permission:%1\n`));
 
   // OpenCode opens a TUI in /proj2: a second setup in the same process.
   const ctx2 = fakeCtx();
@@ -687,12 +753,12 @@ test('a block raised in one directory survives a setup for another directory in 
   expect(core2.state.version).toBe(mod.STATE_VERSION);
   expect(core2.state.sessions).toBe(core1.state.sessions);
   await flush(100); // core2's first sweep has run
-  expect(read(env.home, 'web')).toBe(`web:blocked:${T + 2}:permission\n`);
+  expect(read(env.home, 'web%1')).toBe(`web:blocked:${T + 2}:permission:%1\n`);
   // core2 knows the block: its reply unblocks, and the turn end reads done.
   ctx2.push(ev('permission.replied', T + 3, { requestID: 'per_1', sessionID: 'ses_a', reply: 'once' }, '/proj'));
-  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:working:${T + 3}:unblock\n`));
+  await vi.waitFor(() => expect(read(env.home, 'web%1')).toBe(`web:working:${T + 3}:unblock:%1\n`));
   ctx2.push(ev('session.execution.succeeded', T + 4, { sessionID: 'ses_a' }));
-  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:ready:${T + 4}:stop\n`));
+  await vi.waitFor(() => expect(read(env.home, 'web%1')).toBe(`web:ready:${T + 4}:stop:%1\n`));
   await cleanup2();
 });
 
@@ -706,16 +772,16 @@ test('a core that loads mid-turn learns the turn from its step events: working/p
   const step = traceEvent(21);
   expect(step.type).toBe('session.step.started');
   await core.handle(step);
-  expect(read(home, 'web')).toBe(`web:working:${Math.floor(step.created / 1000)}:prompt\n`);
+  expect(read(home, 'web%1')).toBe(`web:working:${Math.floor(step.created / 1000)}:prompt:%1\n`);
   for (let n = 22; n <= 45; n++) {
     const e = traceEvent(n);
     if (e) await core.handle(e);
   }
-  expect(read(home, 'web')).toBe(`web:working:${Math.floor(step.created / 1000)}:prompt\n`);
+  expect(read(home, 'web%1')).toBe(`web:working:${Math.floor(step.created / 1000)}:prompt:%1\n`);
   const end = traceEvent(46);
   expect(end.type).toBe('session.execution.succeeded');
   await core.handle(end);
-  expect(read(home, 'web')).toBe(`web:ready:${Math.floor(end.created / 1000)}:stop\n`);
+  expect(read(home, 'web%1')).toBe(`web:ready:${Math.floor(end.created / 1000)}:stop:%1\n`);
   // After the turn, a rename (no turn activity) changes nothing.
   expect(core.reducer.apply({ id: 'rn', type: 'session.renamed', created: end.created + 5, data: { sessionID: end.data.sessionID }, location: { directory: '/home/user/proj' } })).toBe(false);
 });
@@ -758,7 +824,7 @@ test('a previous core with a different STATE_VERSION hands over nothing of its r
 test('an event stream that ends without an abort stops the sweep timer, deletes its markers, and keeps the core for a later hand-over', async () => {
   const mod = await import(ASSET);
   const env = fakeTmuxEnv();
-  env.setPanes(row('web', 'opencode', '/proj') + row('dev', 'opencode', '/other'));
+  env.setPanes(row('web', 'opencode', '/proj') + row('dev', 'opencode', '/other', '1', '1', '%2'));
   vi.stubEnv('TMUXIFIER_OPENCODE_DEBUG', '1');
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   const started = [];
@@ -780,20 +846,20 @@ test('an event stream that ends without an abort stops the sweep timer, deletes 
   } } };
   const cleanup1 = await mod.default.setup(ctx);
   const core1 = globalThis[KEY];
-  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:working:${T + 1}:prompt\n`));
-  writeFileSync(marker(env.home, 'dev'), 'dev:blocked:1:permission\n'); // the Claude hook took it over
+  await vi.waitFor(() => expect(read(env.home, 'web%1')).toBe(`web:working:${T + 1}:prompt:%1\n`));
+  writeFileSync(marker(env.home, 'dev%2'), 'dev:blocked:1:permission:%2\n'); // the Claude hook took it over
   endStream();
   await vi.waitFor(() => expect(stopped).toEqual([started[0]]));
   expect(signal.aborted).toBe(false); // ended on its own, not aborted
   expect(err.mock.calls.some((c) => c.join(' ').includes('stream ended'))).toBe(true);
   // The frozen reducer would republish a stale working: its marker is gone,
   // a marker someone else rewrote is kept.
-  await vi.waitFor(() => expect(existsSync(marker(env.home, 'web'))).toBe(false));
-  expect(read(env.home, 'dev')).toBe('dev:blocked:1:permission\n');
+  await vi.waitFor(() => expect(existsSync(marker(env.home, 'web%1'))).toBe(false));
+  expect(read(env.home, 'dev%2')).toBe('dev:blocked:1:permission:%2\n');
   expect(globalThis[KEY]).toBe(core1);
   expect(core1.written.size).toBe(0);
   await core1.sweep(); // a stopped core writes nothing
-  expect(existsSync(marker(env.home, 'web'))).toBe(false);
+  expect(existsSync(marker(env.home, 'web%1'))).toBe(false);
 
   // A later setup still hands over: since, and the reducer state.
   const cleanup2 = await mod.default.setup(fakeCtx());
@@ -801,11 +867,12 @@ test('an event stream that ends without an abort stops the sweep timer, deletes 
   expect(core2).not.toBe(core1);
   expect(core2.written).toBe(core1.written);
   expect(core2.since).toBe(core1.since);
+  expect(core2.paneSince).toBe(core1.paneSince);
   expect(core2.state.sessions).toBe(core1.state.sessions);
-  await vi.waitFor(() => expect(read(env.home, 'web')).toBe(`web:working:${T + 1}:prompt\n`));
+  await vi.waitFor(() => expect(read(env.home, 'web%1')).toBe(`web:working:${T + 1}:prompt:%1\n`));
   await cleanup1(); // the ended ctx leaves the live list: the last cleanup stops everything
   await cleanup2();
-  expect(existsSync(marker(env.home, 'web'))).toBe(false);
+  expect(existsSync(marker(env.home, 'web%1'))).toBe(false);
 });
 
 test('a stream that ends while the first sweep is still listing leaves no marker behind', async () => {
@@ -815,23 +882,23 @@ test('a stream that ends while the first sweep is still listing leaves no marker
   const ctx = { event: { async *subscribe() { yield ev('session.created', null, { sessionID: 'ses_a' }, '/proj'); } } };
   await mod.default.setup(ctx);
   await flush(300); // the in-flight sweep's listing has come back
-  expect(existsSync(marker(env.home, 'web'))).toBe(false);
+  expect(existsSync(marker(env.home, 'web%1'))).toBe(false);
   expect(globalThis[KEY].written.size).toBe(0);
 });
 
 test('cleanup deletes only markers whose content still equals the last write', async () => {
   const mod = await import(ASSET);
   const env = fakeTmuxEnv();
-  env.setPanes(row('web', 'opencode', '/proj') + row('dev', 'opencode', '/other'));
+  env.setPanes(row('web', 'opencode', '/proj') + row('dev', 'opencode', '/other', '1', '1', '%2'));
   const cleanup = await mod.default.setup(fakeCtx());
   await vi.waitFor(() => {
-    expect(existsSync(marker(env.home, 'web'))).toBe(true);
-    expect(existsSync(marker(env.home, 'dev'))).toBe(true);
+    expect(existsSync(marker(env.home, 'web%1'))).toBe(true);
+    expect(existsSync(marker(env.home, 'dev%2'))).toBe(true);
   });
-  writeFileSync(marker(env.home, 'dev'), 'dev:working:1:prompt\n'); // the Claude hook's now
+  writeFileSync(marker(env.home, 'dev%2'), 'dev:working:1:prompt:%2\n'); // the Claude hook's now
   await cleanup();
-  expect(existsSync(marker(env.home, 'web'))).toBe(false);
-  expect(read(env.home, 'dev')).toBe('dev:working:1:prompt\n');
+  expect(existsSync(marker(env.home, 'web%1'))).toBe(false);
+  expect(read(env.home, 'dev%2')).toBe('dev:working:1:prompt:%2\n');
   expect(globalThis[KEY]).toBeUndefined();
 });
 

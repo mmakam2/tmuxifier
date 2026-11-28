@@ -1,7 +1,8 @@
 // Tmuxifier's OpenCode agent-state reporter: an OpenCode V2 plugin that turns
-// OpenCode's own event stream into the `~/.tmuxifier-agent/<session>` markers
-// the Claude Code hook (tmuxifier-agent-hook.sh) writes, so an OpenCode pane
-// shows the same working / blocked / done / idle states.
+// OpenCode's own event stream into the `~/.tmuxifier-agent/<session><%pane>`
+// markers the Claude Code hook (tmuxifier-agent-hook.sh) writes, one per pane
+// running opencode, so an OpenCode pane shows the same working / blocked /
+// done / idle states.
 //
 // It runs INSIDE OpenCode's shared server, not in a TUI, and under OpenCode's
 // embedded Bun on the box as well as under Node in vitest: plain ESM, node
@@ -474,19 +475,24 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
 // Pane attribution: which tmux session shows which OpenCode session's state.
 // ---------------------------------------------------------------------------
 //
-// One server serves every TUI (fact 1) and no event names a tmux session, so a
-// session is attributed by directory: its `dir` against the pane path of each
-// tmux session's active pane of its active window, the pane the probe's
-// STATUS_FMT reports (a tmux session whose current window runs Claude is never
-// touched here). Two TUIs in one directory in two tmux sessions therefore show
-// the same folded state, a documented limitation (spec §4.1).
+// One server serves every TUI (fact 1) and no event names a tmux session or a
+// pane, so a session is attributed by directory: its `dir` against the pane
+// path of every pane running opencode, in any window, active or not. A marker
+// is written for every such pane (`<session><%pane>`), and deleted once the
+// pane no longer runs opencode; a pane running anything else (Claude, a shell)
+// is never touched here. The fold is attribution, not a unit: the one shared
+// server gives no per-TUI handle, so two panes in one directory (in one tmux
+// session or two) show the same folded state, the documented limit (spec §4.1,
+// pane-level design §6.3).
 //
-// Two notions per tmux session, kept apart on purpose:
-// - it HOSTS opencode while any pane in any window runs it; `since` (below)
-//   follows hosting, so switching to another window and back neither resets
-//   it nor hides a block raised meanwhile;
-// - it READS opencode while its active pane of the active window runs it;
-//   only then is a marker written, and a marker it no longer reads is deleted.
+// Two floors, kept apart on purpose:
+// - `paneSince` (pane id -> when that pane started running opencode) follows
+//   the pane: it is the fold's floor, kept across a window switch (so a block
+//   raised meanwhile is not hidden) and across a move of the pane to another
+//   tmux session (the pane id stays), dropped when the pane stops running it;
+// - `since` (tmux session -> when it started hosting opencode in any pane)
+//   follows the tmux session, and only mail reads it (mailTargets, one target
+//   per tmux session).
 
 // The `tmux list-panes -a -F` argument parsePanes reads.
 export const PANE_FORMAT = '#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_id}';
@@ -575,18 +581,20 @@ function tierOf(list, panePath, dirOf) {
 const rankOf = (d) => (d.state === 'blocked' ? 4 : d.state === 'working' ? 3
   : d.state === 'ready' ? (d.cause === 'start' ? 1 : 2) : 0);
 
-// tmux session -> { state, cause, ts } for every active opencode pane (a tmux
-// session that reads opencode). Candidates are root sessions (children roll
-// up into their parent) whose directory is the pane's path (dirExact) or,
-// only when no root session has that directory at all, one above it
-// (dirUnder); the tier is chosen before the `since` filter, so a pane whose
-// own directory has only stale sessions reads ready/start instead of a parent
-// project's state. Within the tier, candidates are those whose ts is not
-// older than `since` (the moment this tmux session started hosting opencode, seconds),
-// which keeps a previous TUI's finished turns from making a relaunch read
-// done. blocked > working > ready/stop > ready/start, ties to the newest ts
-// within a rank; the written ts is the chosen session's own, not the fold
-// time. No candidate: ready/start at `since` (else `now`, seconds).
+// pane id -> { session, state, cause, ts } for every opencode pane (`session`
+// is the tmux session the row lists it under; a pane listed twice, under
+// grouped sessions, keeps the first row; a row without a valid pane id is
+// skipped). Candidates are root sessions (children roll up into their parent)
+// whose directory is the pane's path (dirExact) or, only when no root session
+// has that directory at all, one above it (dirUnder); the tier is chosen
+// before the `since` filter, so a pane whose own directory has only stale
+// sessions reads ready/start instead of a parent project's state. Within the
+// tier, candidates are those whose ts is not older than `since` (pane id ->
+// the moment this pane started running opencode, seconds), which keeps a
+// previous TUI's finished turns from making a relaunch read done. blocked >
+// working > ready/stop > ready/start, ties to the newest ts within a rank;
+// the written ts is the chosen session's own, not the fold time. No
+// candidate: ready/start at `since` (else `now`, seconds).
 export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor(Date.now() / 1000)) {
   if (!(since instanceof Map)) since = new Map();
   const roots = [];
@@ -597,16 +605,17 @@ export function foldForPanes(reducer, panes, since = new Map(), now = Math.floor
   }
   const out = new Map();
   for (const pane of panes) {
-    if (!pane.active || !isOpencodeCmd(pane.cmd)) continue;
-    const floor = since.get(pane.session);
+    if (!isOpencodeCmd(pane.cmd) || typeof pane.pane !== 'string' || !PANE_ID_RE.test(pane.pane)) continue;
+    if (out.has(pane.pane)) continue;
+    const floor = since.get(pane.pane);
     let best = null;
     for (const c of tierOf(roots, pane.path, (r) => r.dir)) {
       if (c.d.ts < (floor ?? 0)) continue;
       if (!best || c.rank > best.rank || (c.rank === best.rank && c.d.ts > best.d.ts)) best = c;
     }
-    out.set(pane.session, best
-      ? { state: best.d.state, cause: best.d.cause, ts: best.d.ts }
-      : { state: 'ready', cause: 'start', ts: floor ?? now });
+    out.set(pane.pane, best
+      ? { session: pane.session, state: best.d.state, cause: best.d.cause, ts: best.d.ts }
+      : { session: pane.session, state: 'ready', cause: 'start', ts: floor ?? now });
   }
   return out;
 }
@@ -677,9 +686,9 @@ export function mailTargets(reducer, panes, since = new Map()) {
   return out;
 }
 
-// The marker the sh hook writes: `<tmux-session>:<state>:<epoch>:<cause>`.
-export function markerLine(tmuxSession, fold) {
-  return `${tmuxSession}:${fold.state}:${fold.ts}:${fold.cause}\n`;
+// The marker the sh hook writes: `<tmux-session>:<state>:<epoch>:<cause>:%<pane>`.
+export function markerLine(tmuxSession, fold, pane) {
+  return `${tmuxSession}:${fold.state}:${fold.ts}:${fold.cause}:${pane}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2123,9 +2132,11 @@ export function createPermissionHandler(options) {
 export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
 
 // One live reporter: a reducer fed by the event stream, and a sweep that
-// lists panes and writes the folded markers. `written` (marker name -> the
-// content this core last wrote), `since` (tmux session -> epoch seconds it
-// started hosting opencode) and `state` (the reducer's, see STATE_VERSION)
+// lists panes and writes the folded markers. `written` (marker name, the safe
+// session name plus the pane id, -> the content this core last wrote),
+// `paneSince` (pane id -> epoch seconds it started running opencode, the
+// fold's floor), `since` (tmux session -> epoch seconds it started hosting
+// opencode, mail's floor) and `state` (the reducer's, see STATE_VERSION)
 // are plain properties so a hand-over can pass them on to the next core;
 // `state` (a previous core's) seeds this core's reducer.
 //
@@ -2197,6 +2208,7 @@ export function createCore({
     clear,
     written: new Map(),
     since: new Map(),
+    paneSince: new Map(),
     mailState: mail?.state ?? null,
     mailTargetsNow,
     paneOfSession,
@@ -2335,11 +2347,12 @@ export function createCore({
     }
     if (aborted || ended) return; // handed over or stopped: touch nothing
     if (text === null) { syncMail(null); return; } // tmux unusable: no markers touched, no mail targets
-    // A tmux session that starts hosting opencode in this listing did so after
-    // the previous listing, the last one that showed it not hosting: that is
-    // its `since`. Stamping this sweep's own time instead would exclude a
-    // TUI's whole first turn whenever the listing is slower than the turn's
-    // start (`ts >= since`). A core's first sweep has no previous listing.
+    // A tmux session (or a pane) that starts hosting opencode in this listing
+    // did so after the previous listing, the last one that showed it not
+    // hosting: that is its `since` (`paneSince`). Stamping this sweep's own
+    // time instead would exclude a TUI's whole first turn whenever the listing
+    // is slower than the turn's start (`ts >= since`). A core's first sweep
+    // has no previous listing.
     const sinceFloor = lastListAt ?? listAt - 2;
     lastListAt = listAt;
     let complete = false;
@@ -2352,10 +2365,18 @@ export function createCore({
       for (const s of hosting) if (!core.since.has(s)) core.since.set(s, sinceFloor);
       for (const s of [...core.since.keys()]) if (!hosting.has(s)) core.since.delete(s);
 
+      const hostingPanes = new Set();
+      for (const p of panes) if (isOpencodeCmd(p.cmd)) hostingPanes.add(p.pane);
+      for (const id of hostingPanes) if (!core.paneSince.has(id)) core.paneSince.set(id, sinceFloor);
+      for (const id of [...core.paneSince.keys()]) if (!hostingPanes.has(id)) core.paneSince.delete(id);
+
       const live = new Set();
-      for (const [session, fold] of foldForPanes(reducer, panes, core.since, t)) {
-        const name = safeName(session);
-        const content = markerLine(session, fold);
+      for (const [pane, fold] of foldForPanes(reducer, panes, core.paneSince, t)) {
+        const safe = safeName(fold.session);
+        // `.`/`..` cannot be tmux session names, but the listing is untrusted.
+        if (!safe || safe === '.' || safe === '..') continue;
+        const name = safe + pane;
+        const content = markerLine(fold.session, fold, pane);
         live.add(name);
         if (core.written.get(name) !== content && write(name, content)) core.written.set(name, content);
       }
@@ -2468,10 +2489,10 @@ export function createCore({
 
 // The hand-over every setup performs: abort whichever core `prev` is (a
 // foreign or older object is never trusted to have abort()), then build the
-// next core inheriting what `prev` wrote, when each tmux session started
-// hosting, and everything its reducer knows (a pending block or a mid-turn
-// session in another directory must survive OpenCode setting the plugin up
-// for a new one; an incompatible STATE_VERSION starts fresh), and the mail
+// next core inheriting what `prev` wrote, when each pane started running
+// opencode and each tmux session started hosting it, and everything its
+// reducer knows (a pending block or a mid-turn session in another directory
+// must survive OpenCode setting the plugin up for a new one; an incompatible STATE_VERSION starts fresh), and the mail
 // part's in-flight items (prev.mailState; its abort ended every held wait).
 // It also disposes `prev`'s registry (every hook it registered on OpenCode),
 // once `opts.registry`'s own registrations have settled (R34: an overlap, not
@@ -2485,6 +2506,7 @@ export function createCore({
 export function takeOver(prev, opts = {}) {
   let written = null;
   let since = null;
+  let paneSince = null;
   let state = null;
   let mailState = null;
   let live = opts.live instanceof Map ? opts.live : null;
@@ -2494,6 +2516,7 @@ export function takeOver(prev, opts = {}) {
     try {
       if (prev.written instanceof Map) written = prev.written;
       if (prev.since instanceof Map) since = prev.since;
+      if (prev.paneSince instanceof Map) paneSince = prev.paneSince;
       state = prev.state ?? null;
       mailState = prev.mailState ?? null;
       if (!live && prev.live instanceof Map) live = prev.live;
@@ -2503,6 +2526,7 @@ export function takeOver(prev, opts = {}) {
   const core = createCore({ ...opts, state, mailState, live, pieces });
   if (written) core.written = written;
   if (since) core.since = since;
+  if (paneSince) core.paneSince = paneSince;
   if (known) {
     try { prev.abort(); } catch { /* a foreign or older object */ }
     disposeAfter(prev, opts.registry);

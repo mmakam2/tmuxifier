@@ -28,7 +28,7 @@ function world() {
   };
 }
 
-const pane = (session, path, cmd = 'opencode', active = true) => ({ session, cmd, path, active });
+const pane = (id, session, path, cmd = 'opencode', active = true) => ({ session, cmd, path, active, pane: id });
 const sc = (f) => `${f.state}/${f.cause}`;
 
 test('PANE_FORMAT lists session, active flags, command, path and pane id, tab-separated', () => {
@@ -61,14 +61,11 @@ test('parsePanes rejects controls in any field, over-long names and paths, and c
   for (const bad of [undefined, null, 42, {}]) expect(parsePanes(bad)).toEqual([]);
 });
 
-test('a session whose active window runs claude is not folded even if another window runs opencode', () => {
-  const text = 'web\t1\t1\tclaude\t/home/user/proj\t%1\nweb\t0\t1\topencode\t/home/user/proj\t%2\n';
-  const panes = parsePanes(text);
-  expect(panes.filter((p) => isOpencodeCmd(p.cmd)).map((p) => p.active)).toEqual([false]);
-  expect(foldForPanes(createReducer(), panes, new Map(), 1).has('web')).toBe(false);
-  // The opencode window becoming the active one is what makes it read opencode.
-  const back = parsePanes('web\t0\t1\tclaude\t/home/user/proj\t%1\nweb\t1\t1\topencode\t/home/user/proj\t%2\n');
-  expect(foldForPanes(createReducer(), back, new Map(), 1).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 1 });
+test('every opencode pane is folded, in a background window too; a claude pane never is', () => {
+  const panes = parsePanes('web\t1\t1\tclaude\t/home/user/proj\t%1\nweb\t0\t1\topencode\t/home/user/proj\t%2\n');
+  const fold = foldForPanes(createReducer(), panes, new Map(), 1);
+  expect([...fold.keys()]).toEqual(['%2']);
+  expect(fold.get('%2')).toEqual({ session: 'web', state: 'ready', cause: 'start', ts: 1 });
 });
 
 test('isOpencodeCmd accepts opencode and opencode-<suffix>, rejects node, bun, opencodex', () => {
@@ -106,95 +103,97 @@ test('foldForPanes: blocked beats working beats ready; ties go to the newest ts;
   for (const s of ['ses_a', 'ses_b', 'ses_c']) w.created(s, 100, '/proj');
   w.start('ses_a', 110); w.end('ses_a', 120); // ready/stop @120
   w.start('ses_b', 130); // working/prompt @130
-  const panes = [pane('web', '/proj')];
-  const since = new Map([['web', 0]]);
-  expect(foldForPanes(w.r, panes, since, 999).get('web')).toEqual({ state: 'working', cause: 'prompt', ts: 130 });
+  const panes = [pane('%1', 'web', '/proj')];
+  const since = new Map([['%1', 0]]);
+  expect(foldForPanes(w.r, panes, since, 999).get('%1')).toEqual({ session: 'web', state: 'working', cause: 'prompt', ts: 130 });
   w.ask('ses_c', 140, 'per_c'); // blocked/permission @140 on a session that never started
-  expect(foldForPanes(w.r, panes, since, 999).get('web')).toEqual({ state: 'blocked', cause: 'permission', ts: 140 });
+  expect(foldForPanes(w.r, panes, since, 999).get('%1')).toEqual({ session: 'web', state: 'blocked', cause: 'permission', ts: 140 });
 
   // Ties within a state: the newest ts wins.
   const t = world();
   t.created('ses_old', 100, '/proj'); t.created('ses_new', 100, '/proj');
   t.start('ses_new', 150); t.start('ses_old', 160); t.end('ses_old', 170); t.end('ses_new', 180);
-  expect(foldForPanes(t.r, panes, since, 999).get('web')).toEqual({ state: 'ready', cause: 'stop', ts: 180 });
+  expect(foldForPanes(t.r, panes, since, 999).get('%1')).toEqual({ session: 'web', state: 'ready', cause: 'stop', ts: 180 });
   t.start('ses_old', 200); t.start('ses_new', 210);
-  expect(foldForPanes(t.r, panes, since, 999).get('web').ts).toBe(210);
+  expect(foldForPanes(t.r, panes, since, 999).get('%1').ts).toBe(210);
   // A session that never started is a ready candidate like any other.
   const n = world();
   n.created('ses_n', 300, '/proj');
-  expect(foldForPanes(n.r, panes, since, 999).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 300 });
+  expect(foldForPanes(n.r, panes, since, 999).get('%1')).toEqual({ session: 'web', state: 'ready', cause: 'start', ts: 300 });
 });
 
 test('foldForPanes: a finished turn outranks a newer session that has not started (fixture lines 336-342)', () => {
   const w = world();
   w.created('ses_done', 100, '/proj'); w.start('ses_done', 110); w.end('ses_done', 120); // ready/stop @120
   w.created('ses_fresh', 200, '/proj'); // ready/start @200, newer
-  const panes = [pane('web', '/proj')];
-  expect(foldForPanes(w.r, panes, new Map([['web', 0]]), 999).get('web')).toEqual({ state: 'ready', cause: 'stop', ts: 120 });
+  const panes = [pane('%1', 'web', '/proj')];
+  expect(foldForPanes(w.r, panes, new Map([['%1', 0]]), 999).get('%1')).toEqual({ session: 'web', state: 'ready', cause: 'stop', ts: 120 });
   // Once the fresh session starts, it wins as working.
   w.start('ses_fresh', 210);
-  expect(foldForPanes(w.r, panes, new Map([['web', 0]]), 999).get('web')).toEqual({ state: 'working', cause: 'prompt', ts: 210 });
+  expect(foldForPanes(w.r, panes, new Map([['%1', 0]]), 999).get('%1')).toEqual({ session: 'web', state: 'working', cause: 'prompt', ts: 210 });
   // A finished turn older than since is still excluded: the fresh session's ready/start shows.
   const x = world();
   x.created('ses_done', 100, '/proj'); x.start('ses_done', 110); x.end('ses_done', 120);
   x.created('ses_fresh', 200, '/proj');
-  expect(foldForPanes(x.r, panes, new Map([['web', 150]]), 999).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 200 });
+  expect(foldForPanes(x.r, panes, new Map([['%1', 150]]), 999).get('%1')).toEqual({ session: 'web', state: 'ready', cause: 'start', ts: 200 });
 });
 
 test('foldForPanes: a session finished before the pane\'s since is excluded and the pane reads ready/start at since', () => {
   const w = world();
   w.created('ses_a', 100, '/proj'); w.start('ses_a', 110); w.end('ses_a', 120);
-  const panes = [pane('web', '/proj')];
-  expect(foldForPanes(w.r, panes, new Map([['web', 500]]), 999).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 500 });
+  const panes = [pane('%1', 'web', '/proj')];
+  expect(foldForPanes(w.r, panes, new Map([['%1', 500]]), 999).get('%1')).toEqual({ session: 'web', state: 'ready', cause: 'start', ts: 500 });
   // ts equal to since is still a candidate.
-  expect(sc(foldForPanes(w.r, panes, new Map([['web', 120]]), 999).get('web'))).toBe('ready/stop');
+  expect(sc(foldForPanes(w.r, panes, new Map([['%1', 120]]), 999).get('%1'))).toBe('ready/stop');
   // A newer turn of the same session is its own state again.
   w.start('ses_a', 600);
-  expect(foldForPanes(w.r, panes, new Map([['web', 500]]), 999).get('web')).toEqual({ state: 'working', cause: 'prompt', ts: 600 });
+  expect(foldForPanes(w.r, panes, new Map([['%1', 500]]), 999).get('%1')).toEqual({ session: 'web', state: 'working', cause: 'prompt', ts: 600 });
   // No since recorded for the pane: everything counts; no candidates at all reads ready/start at now.
-  expect(sc(foldForPanes(w.r, panes, new Map(), 999).get('web'))).toBe('working/prompt');
-  expect(foldForPanes(createReducer(), panes, new Map(), 999).get('web')).toEqual({ state: 'ready', cause: 'start', ts: 999 });
+  expect(sc(foldForPanes(w.r, panes, new Map(), 999).get('%1'))).toBe('working/prompt');
+  expect(foldForPanes(createReducer(), panes, new Map(), 999).get('%1')).toEqual({ session: 'web', state: 'ready', cause: 'start', ts: 999 });
 });
 
 test('foldForPanes: two tmux sessions in the same directory get the same fold; a pane in another directory is untouched', () => {
   const w = world();
   w.created('ses_a', 100, '/proj'); w.start('ses_a', 110);
-  const panes = [pane('one', '/proj'), pane('two', '/proj/sub'), pane('other', '/elsewhere'), pane('shell', '/proj', 'zsh')];
+  const panes = [pane('%1', 'one', '/proj'), pane('%2', 'two', '/proj/sub'), pane('%3', 'other', '/elsewhere'), pane('%4', 'shell', '/proj', 'zsh')];
   const fold = foldForPanes(w.r, panes, new Map(), 999);
-  expect(fold.get('one')).toEqual({ state: 'working', cause: 'prompt', ts: 110 });
-  expect(fold.get('two')).toEqual(fold.get('one'));
-  expect(fold.get('other')).toEqual({ state: 'ready', cause: 'start', ts: 999 });
-  expect(fold.has('shell')).toBe(false); // not an opencode pane: never written
-  // An opencode pane that is not the active pane of the active window is never folded.
-  expect(foldForPanes(w.r, [pane('bg', '/proj', 'opencode', false)], new Map(), 999).has('bg')).toBe(false);
+  const st = ({ state, cause, ts }) => ({ state, cause, ts });
+  expect(fold.get('%1')).toEqual({ session: 'one', state: 'working', cause: 'prompt', ts: 110 });
+  expect(st(fold.get('%2'))).toEqual(st(fold.get('%1')));
+  expect(fold.get('%2').session).toBe('two');
+  expect(fold.get('%3')).toEqual({ session: 'other', state: 'ready', cause: 'start', ts: 999 });
+  expect(fold.has('%4')).toBe(false); // not an opencode pane: never written
+  // An opencode pane that is not the active pane of the active window is folded like any other.
+  expect(foldForPanes(w.r, [pane('%9', 'bg', '/proj', 'opencode', false)], new Map(), 999).get('%9')).toEqual({ session: 'bg', state: 'working', cause: 'prompt', ts: 110 });
   // A session with no directory is attributed nowhere.
   const u = createReducer({ now: () => 50 });
   u.apply({ id: 'x', type: 'session.execution.started', data: { sessionID: 'ses_u' } });
-  expect(sc(foldForPanes(u, [pane('one', '/proj')], new Map(), 999).get('one'))).toBe('ready/start');
+  expect(sc(foldForPanes(u, [pane('%5', 'one', '/proj')], new Map(), 999).get('%5'))).toBe('ready/start');
 });
 
 test('foldForPanes: an exact directory match wins over a nested project; a parent pane never folds a child project', () => {
   const w = world();
   w.created('ses_top', 100, '/home/user/repo'); w.start('ses_top', 110); w.end('ses_top', 120); // ready/stop @120
   w.created('ses_sub', 130, '/home/user/repo/sub'); w.start('ses_sub', 140); w.ask('ses_sub', 150, 'per_s'); // blocked @150
-  const panes = [pane('top', '/home/user/repo'), pane('sub', '/home/user/repo/sub')];
+  const panes = [pane('%1', 'top', '/home/user/repo'), pane('%2', 'sub', '/home/user/repo/sub')];
   const fold = foldForPanes(w.r, panes, new Map(), 999);
-  expect(fold.get('top')).toEqual({ state: 'ready', cause: 'stop', ts: 120 });
-  expect(fold.get('sub')).toEqual({ state: 'blocked', cause: 'permission', ts: 150 });
+  expect(fold.get('%1')).toEqual({ session: 'top', state: 'ready', cause: 'stop', ts: 120 });
+  expect(fold.get('%2')).toEqual({ session: 'sub', state: 'blocked', cause: 'permission', ts: 150 });
   // A parent pane with no session of its own still does not absorb the child project.
   const c = world();
   c.created('ses_sub', 130, '/home/user/repo/sub'); c.start('ses_sub', 140);
-  expect(foldForPanes(c.r, [pane('top', '/home/user/repo')], new Map(), 999).get('top')).toEqual({ state: 'ready', cause: 'start', ts: 999 });
+  expect(foldForPanes(c.r, [pane('%3', 'top', '/home/user/repo')], new Map(), 999).get('%3')).toEqual({ session: 'top', state: 'ready', cause: 'start', ts: 999 });
   // A pane deeper than every reported directory falls back to the directories above it.
   const d = world();
   d.created('ses_top', 100, '/home/user/repo'); d.start('ses_top', 110);
-  expect(foldForPanes(d.r, [pane('deep', '/home/user/repo/sub/x')], new Map(), 999).get('deep')).toEqual({ state: 'working', cause: 'prompt', ts: 110 });
+  expect(foldForPanes(d.r, [pane('%4', 'deep', '/home/user/repo/sub/x')], new Map(), 999).get('%4')).toEqual({ session: 'deep', state: 'working', cause: 'prompt', ts: 110 });
   // An exact session, even a finished one before since, keeps the prefix tier out:
   // the pane's own directory is the one OpenCode reports for it.
   d.created('ses_deep', 200, '/home/user/repo/sub/x'); d.start('ses_deep', 210); d.end('ses_deep', 220);
   d.ask('ses_top', 600, 'per_t'); // the parent directory's session is blocked, and newer
-  expect(foldForPanes(d.r, [pane('deep', '/home/user/repo/sub/x')], new Map(), 999).get('deep')).toEqual({ state: 'ready', cause: 'stop', ts: 220 });
-  expect(foldForPanes(d.r, [pane('deep', '/home/user/repo/sub/x')], new Map([['deep', 500]]), 999).get('deep')).toEqual({ state: 'ready', cause: 'start', ts: 500 });
+  expect(foldForPanes(d.r, [pane('%4', 'deep', '/home/user/repo/sub/x')], new Map(), 999).get('%4')).toEqual({ session: 'deep', state: 'ready', cause: 'stop', ts: 220 });
+  expect(foldForPanes(d.r, [pane('%4', 'deep', '/home/user/repo/sub/x')], new Map([['%4', 500]]), 999).get('%4')).toEqual({ session: 'deep', state: 'ready', cause: 'start', ts: 500 });
 });
 
 test('foldForPanes: child sessions are never chosen directly', () => {
@@ -203,27 +202,55 @@ test('foldForPanes: child sessions are never chosen directly', () => {
   w.start('ses_p', 110); w.end('ses_p', 120);
   w.created('ses_c', 130, '/proj', 'ses_p');
   w.start('ses_c', 140);
-  const panes = [pane('web', '/proj')];
+  const panes = [pane('%1', 'web', '/proj')];
   // The child's work rolls up into the parent: the parent is the one chosen,
   // so the ts is the parent's (moved by the child's start).
-  expect(foldForPanes(w.r, panes, new Map(), 999).get('web')).toEqual({ state: 'working', cause: 'prompt', ts: 140 });
+  expect(foldForPanes(w.r, panes, new Map(), 999).get('%1')).toEqual({ session: 'web', state: 'working', cause: 'prompt', ts: 140 });
   w.ask('ses_c', 150, 'per_c');
-  expect(foldForPanes(w.r, panes, new Map(), 999).get('web')).toEqual({ state: 'blocked', cause: 'permission', ts: 150 });
+  expect(foldForPanes(w.r, panes, new Map(), 999).get('%1')).toEqual({ session: 'web', state: 'blocked', cause: 'permission', ts: 150 });
   // An orphan child whose parent is gone is still not a root, so not a candidate.
   w.r.apply({ id: 'del', type: 'session.deleted', created: 160_000, data: { sessionID: 'ses_p' } });
-  expect(sc(foldForPanes(w.r, panes, new Map(), 999).get('web'))).toBe('ready/start');
+  expect(sc(foldForPanes(w.r, panes, new Map(), 999).get('%1'))).toBe('ready/start');
 });
 
-test('markerLine writes session:state:ts:cause with a trailing newline', () => {
-  expect(markerLine('web', { state: 'blocked', cause: 'permission', ts: 1794098652 })).toBe('web:blocked:1794098652:permission\n');
-  expect(markerLine('octest', { state: 'ready', cause: 'start', ts: 0 })).toBe('octest:ready:0:start\n');
+test('two panes of one tmux session in different directories each read their own directory', () => {
+  const w = world();
+  w.created('ses_a', 100, '/proj'); w.start('ses_a', 110); // working @110
+  w.created('ses_b', 100, '/other'); w.start('ses_b', 120); w.ask('ses_b', 130, 'per_b'); // blocked @130
+  const panes = [pane('%1', 'web', '/proj'), pane('%2', 'web', '/other', 'opencode', false)];
+  const fold = foldForPanes(w.r, panes, new Map(), 999);
+  expect(fold.get('%1')).toEqual({ session: 'web', state: 'working', cause: 'prompt', ts: 110 });
+  expect(fold.get('%2')).toEqual({ session: 'web', state: 'blocked', cause: 'permission', ts: 130 });
+});
+
+test('since is per pane: a floor keyed by the tmux session name is not a floor', () => {
+  const w = world();
+  w.created('ses_a', 100, '/proj'); w.start('ses_a', 110); w.end('ses_a', 120); // ready/stop @120
+  const panes = [pane('%1', 'web', '/proj'), pane('%2', 'web', '/proj')];
+  const fold = foldForPanes(w.r, panes, new Map([['%2', 500], ['web', 900]]), 999);
+  expect(fold.get('%1')).toEqual({ session: 'web', state: 'ready', cause: 'stop', ts: 120 });
+  expect(fold.get('%2')).toEqual({ session: 'web', state: 'ready', cause: 'start', ts: 500 });
+});
+
+test('a pane listed under two grouped sessions is folded once, under the first listed; a row without a pane id never is', () => {
+  const w = world();
+  w.created('ses_a', 100, '/proj'); w.start('ses_a', 110);
+  const panes = [pane('%3', 'alpha', '/proj'), pane('%3', 'beta', '/proj'), pane(undefined, 'gamma', '/proj'), pane('%x', 'delta', '/proj')];
+  const fold = foldForPanes(w.r, panes, new Map(), 999);
+  expect([...fold.keys()]).toEqual(['%3']);
+  expect(fold.get('%3')).toEqual({ session: 'alpha', state: 'working', cause: 'prompt', ts: 110 });
+});
+
+test('markerLine writes session:state:ts:cause:%pane with a trailing newline', () => {
+  expect(markerLine('web', { state: 'blocked', cause: 'permission', ts: 1794098652 }, '%12')).toBe('web:blocked:1794098652:permission:%12\n');
+  expect(markerLine('octest', { state: 'ready', cause: 'start', ts: 0 }, '%0')).toBe('octest:ready:0:start:%0\n');
 });
 
 test('foldForPanes treats a missing or non-Map since as empty', () => {
   const w = world();
   w.created('ses_a', 100, '/proj'); w.start('ses_a', 110);
-  const panes = [pane('web', '/proj')];
-  for (const since of [undefined, null, {}, [['web', 500]], 'web']) {
-    expect(foldForPanes(w.r, panes, since, 999).get('web'), String(since)).toEqual({ state: 'working', cause: 'prompt', ts: 110 });
+  const panes = [pane('%1', 'web', '/proj')];
+  for (const since of [undefined, null, {}, [['%1', 500]], 'web']) {
+    expect(foldForPanes(w.r, panes, since, 999).get('%1'), String(since)).toEqual({ session: 'web', state: 'working', cause: 'prompt', ts: 110 });
   }
 });

@@ -507,7 +507,7 @@ describe('the entry point', () => {
       const ctx = ocCtx('/home/user/proj', opts);
       const cleanup = await mod.default.setup(ctx);
       const core = globalThis[KEY];
-      await vi.waitFor(() => expect(readFileSync(path.join(env.home, '.tmuxifier-agent', 'web'), 'utf8')).toMatch(/^web:ready:\d+:start\n$/));
+      await vi.waitFor(() => expect(readFileSync(path.join(env.home, '.tmuxifier-agent', 'web%1'), 'utf8')).toMatch(/^web:ready:\d+:start:%1\n$/));
       ctx.push(ev('session.created', { sessionID: 'ses_a' }, '/home/user/proj'));
       ctx.push(ev('session.inbox.enqueued', { sessionID: 'ses_a', inboxID: 'i1', item: { type: 'user' } }, '/home/user/proj'));
       // The operator's turn runs and ends: the session reads ready, the moment a wait is armed.

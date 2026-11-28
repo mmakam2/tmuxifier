@@ -26,7 +26,7 @@ const PANES = parsePanes(
   'octest\t1\t1\topencode\t/home/user/proj\t%1\n' +
   'octest2\t1\t1\topencode\t/home/user/proj2\t%2\n',
 );
-const SINCE = new Map([['octest', 0], ['octest2', 0]]);
+const SINCE = new Map([['%1', 0], ['%2', 0]]);
 const END_RE = /^session\.execution\.(succeeded|interrupted|failed)$/;
 
 const lines = readFileSync(TRACE, 'utf8').split('\n');
@@ -125,14 +125,14 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
   expect(trail).toHaveLength(1983);
   expect(redelivered, 'the plain replay re-delivers nothing of its own').toEqual([]);
 
-  const at = (n) => sc(trail[n - 1].fold.get('octest'));
-  const at2 = (n) => sc(trail[n - 1].fold.get('octest2'));
-  const tsOf = (n, pane = 'octest') => trail[n - 1].fold.get(pane).ts;
+  const at = (n) => sc(trail[n - 1].fold.get('%1'));
+  const at2 = (n) => sc(trail[n - 1].fold.get('%2'));
+  const tsOf = (n, pane = '%1') => trail[n - 1].fold.get(pane).ts;
   const secOf = (n) => Math.floor(trail[n - 1].created / 1000);
   if (process.env.REPLAY_TRAIL) {
     let prev = '';
     for (const t of trail) {
-      const row = `${sc(t.fold.get('octest'))}\t${sc(t.fold.get('octest2'))}`;
+      const row = `${sc(t.fold.get('%1'))}\t${sc(t.fold.get('%2'))}`;
       if (row !== prev || t.kind !== 'event') console.log(`${t.n}\t${t.kind === 'event' ? t.type : t.kind}\t${row}`);
       prev = row;
     }
@@ -166,7 +166,7 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
   expect(at(aEnd)).toBe('ready/stop');
   expect(at(find('a-plain', 'session.viewed'))).toBe('ready/stop'); // viewing is not a state change
   expect(tsOf(aEnd)).toBe(secOf(aEnd));
-  expect(markerLine('octest', trail[aEnd - 1].fold.get('octest'))).toBe(`octest:ready:${secOf(aEnd)}:stop\n`);
+  expect(markerLine('octest', trail[aEnd - 1].fold.get('%1'), '%1')).toBe(`octest:ready:${secOf(aEnd)}:stop:%1\n`);
 
   // (b1, g3) permission asked (275-276), a mail synthetic queued while the
   // prompt is open (280), allowed once (282): the prompt blocks, the queued
@@ -252,7 +252,7 @@ test('the recorded OpenCode 2.3.0 trace drives the per-pane markers through ever
     expect(tsOf(n), `line ${n}`).toBe(secOf(g1End));
   }
   expect(at2(eEnd)).toBe('ready/stop');
-  expect(tsOf(eEnd, 'octest2')).toBe(secOf(eEnd));
+  expect(tsOf(eEnd, '%2')).toBe(secOf(eEnd));
 
   // (f) a second TUI in proj, a new session there (867-905): its creation must
   // not hide the first session's finished turn; its own turn is working, and
