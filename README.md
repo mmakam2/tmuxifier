@@ -261,7 +261,7 @@ it. Setup and the tool reference are in [the MCP guide](docs/mcp.md).
 
 ## Android app (agent console)
 A native Kotlin/Compose companion in [`android/`](android/) for driving **agent sessions from a
-phone**: fleet glance with waiting-first sorting, a read-only pane snapshot
+phone**: a fleet glance that lists each box's agents (most urgent first), a read-only pane snapshot
 rendered as native text (tmux stays the terminal emulator — phone viewing can never resize
 your desktop windows), a semantic action row, a local-until-send composer, and FCM push when
 an agent needs you. Devices enroll with a single-use **pairing code** minted in Settings →

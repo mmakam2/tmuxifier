@@ -1056,8 +1056,10 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
 
 Kotlin/Compose agent console — a **renderer of the server APIs**: it never speaks SSH or emulates
 a terminal (design: `docs/superpowers/specs/2026-08-09-android-agent-console-design.md`).
-`pane/Sgr.kt` parses `capture-pane -e` into spans rendered as inert native text; `keys/`
-(`armReduce`, `sendTextOf` mirror the web/server) and `session/` are pure and JVM-tested; `api/`
+`pane/Sgr.kt` parses `capture-pane -e` into spans rendered as inert native text; `agent/`
+(`agentRows` mirrors the browser's row naming, `ackNext`, `planJump`), `keys/` (`armReduce`,
+`sendTextOf` mirror the web/server) and `session/` are pure and JVM-tested; the app acknowledges
+(`agent-seen`) the pane its session screen shows, only while that screen is in front; `api/`
 is OkHttp + a Keystore token store. Build with Gradle (`android/README.md`: toolchain, memory caps,
 signing, the **keystore backup obligation**), separate from `npm test`; Compose UI is validated on
 a real device only. Firebase is initialized at runtime from `GET /api/devices/fcm-config` — nothing

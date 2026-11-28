@@ -23,7 +23,7 @@ pinned version moved — pick the nearest current one and record the change in b
 ## Commands
 
 ```bash
-./gradlew test            # pure-Kotlin JVM unit tests (api/, fleet/, keys/, pane/, session/)
+./gradlew test            # pure-Kotlin JVM unit tests (agent/, api/, fleet/, keys/, pane/, push/, session/)
 ./gradlew assembleDebug   # app/build/outputs/apk/debug/app-debug.apk (debug-signed, installable)
 ./gradlew assembleRelease # app/build/outputs/apk/release/app-release.apk — signed with
                           # keystore.properties when it exists, otherwise UNSIGNED (Android
