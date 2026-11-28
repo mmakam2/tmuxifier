@@ -30,6 +30,14 @@ internal fun killBody(session: String, windowId: String?): String = buildJsonObj
     if (windowId != null) put("windowId", windowId)
 }.toString()
 
+// The window route focuses a pane only when `paneId` is there, so a plain window
+// select OMITS it rather than sending null (as killBody omits windowId).
+internal fun windowBody(session: String, windowId: String, paneId: String?): String = buildJsonObject {
+    put("session", session)
+    put("windowId", windowId)
+    if (paneId != null) put("paneId", paneId)
+}.toString()
+
 // `ts` goes out as a JSON number: the route checks Number.isSafeInteger(ts), so a
 // quoted one is a 400.
 internal fun agentSeenBody(pane: String, ts: Long): String = buildJsonObject {
@@ -135,10 +143,11 @@ class ApiClient(
         parse(statusMapSerializer, request("POST", "/api/boxes/$boxId/probe"))
 
     // Switch the session's active window. No reattach: the current window is
-    // session state in tmux, so every attached client follows on its own.
-    suspend fun selectWindow(boxId: String, session: String, windowId: String) {
-        request("POST", "/api/boxes/$boxId/window",
-            buildJsonObject { put("session", session); put("windowId", windowId) }.toString())
+    // session state in tmux, so every attached client follows on its own. With
+    // paneId the server also focuses that pane, after checking it is still in the
+    // window (502 otherwise, and nothing moves).
+    suspend fun selectWindow(boxId: String, session: String, windowId: String, paneId: String? = null) {
+        request("POST", "/api/boxes/$boxId/window", windowBody(session, windowId, paneId))
     }
 
     // Kill a session, or one window inside it. Session-qualified in both forms.

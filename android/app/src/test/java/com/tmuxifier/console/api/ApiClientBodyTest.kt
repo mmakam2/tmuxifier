@@ -24,6 +24,11 @@ class ApiClientBodyTest {
         assertEquals("""{"pane":"%12","ts":1723180000}""", agentSeenBody("%12", 1723180000L))
     }
 
+    @Test fun aWindowSelectOmitsPaneIdUnlessGiven() {
+        assertEquals("""{"session":"main","windowId":"@3"}""", windowBody("main", "@3", null))
+        assertEquals("""{"session":"main","windowId":"@3","paneId":"%12"}""", windowBody("main", "@3", "%12"))
+    }
+
     @Test fun aResponseThatDoesNotDecodeIsAnApiException() {
         val e = assertFailsWith<ApiException> { decodeResponse(seriesMapSerializer, """{"b1":[{"t":"soon","up":true}]}""") }
         assertEquals(0, e.status)
