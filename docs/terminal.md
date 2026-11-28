@@ -37,7 +37,10 @@ only*: the picked session keeps running exactly as it was, this pane's terminal 
 it, and nothing else is touched — not another pane on the same box, not another browser tab,
 not the box's own configured session (see
 [Several panes of one box](#several-panes-of-one-box) below for what that means when a box has
-more than one pane docked). To change what a box opens to by default, use the session field in
+more than one pane docked). Picking a window of a different session does both: that window is
+selected first, then this pane reattaches to it. A finished turn in the window that session had in
+front before the pick is not marked seen on the way; the agents in the window you picked are,
+once the terminal shows it. To change what a box opens to by default, use the session field in
 its Edit dialog instead — that's the one place a session choice is still global. Agents are
 tracked in every session of the box, whichever one a pane shows. The header's agent chip is the
 most urgent state among the agents you can see in that terminal: the panes of the window in

@@ -1,6 +1,6 @@
 # Privacy Policy — tmuxifier console (Android app)
 
-_Last updated: 2026-11-16_
+_Last updated: 2026-11-28_
 
 Tmuxifier is self-hosted software. The Android app ("tmuxifier console", package
 `com.tmuxifier.console`) is a client for a Tmuxifier server that **you** run, on hardware you

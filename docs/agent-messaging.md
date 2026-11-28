@@ -793,7 +793,14 @@ Starting an agent on a box has its own list: see [What is not in this version](#
   session.
 - **A session without a listener loses nothing.** Its mail waits, the sender is told `not
   listening`, and `tmx inbox` in that session reads it. For Claude Code, the end of each turn
-  starts a new listener.
+  starts a new listener. A listener counts only on a pane whose own agent state names the session:
+  one on a pane with no state yet reads `not listening` too, since nothing can be handed to it.
+- **Grouped tmux sessions.** With grouped sessions (`tmux new-session -t`), mail addressed to the
+  second session of a group may wait, because the agent's state is recorded under the first.
+- **A box with 400 or more tmux panes** shows no agent state: the pane listing is capped at 400
+  rows, and a capped listing is not trusted. Mail still reaches its agents, except one whose
+  box-side writer has not been re-pushed by a setup rerun: its session's shared state then speaks
+  for no pane, so its mail waits.
 - **Two OpenCode windows in one project folder, in different tmux sessions: neither receives.**
   OpenCode runs one server for all its windows, and nothing in it says which window you used, so
   Tmuxifier cannot tell which tmux session a session belongs to. It would rather deliver nothing

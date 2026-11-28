@@ -285,8 +285,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `POST /api/boxes/:id/kill` `{ session, windowId? }` kills a session or one window; killing the
   pane's own session is allowed (it reconnects to a fresh one). Session switching is just
   `PATCH /api/boxes/:id`, which closes the box's terminal PTY group. Window/kill await a
-  best-effort `statusPoller.probeOne` so the next `/api/status` is fresh; window then also awaits a
-  best-effort `refreshAgents`, so the health series' `visible`/`focused` flags follow the select.
+  best-effort `statusPoller.probeOne` so the next `/api/status` is fresh, then a best-effort
+  `refreshAgents`, so the health series follows (the select's `visible`/`focused` flags, a killed
+  pane's row gone); neither after a failure.
   `POST /api/local-shell/window` `{ windowId, paneId? }` is the Host Shell's counterpart: browser
   session only, the `local` session only (never created), then a best-effort
   `refreshAgents('__local__')`.
@@ -302,7 +303,9 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   tracking on). `POST /api/boxes/:id/pane-kind` is the mic button's link-vs-dictate verdict.
   An optional `pane=%N` (`PANE_ID_RE`, 400 otherwise; 403 for a device token; 404 when the latest
   sample has no such agent pane) captures that pane by its exact target, its session and window
-  taken from the server's own sample, ignores `cols`/`rows` and answers that pane's state.
+  taken from the server's own sample, ignores `cols`/`rows` and answers that pane's state. The
+  removed `session` parameter is refused, not ignored: 400 naming `pane` for a browser session,
+  403 for a device token (neither the app nor the MCP server sends it).
   `GET /api/local-shell/pane[?pane=%N]` is the Host Shell's counterpart by the same rule: browser
   session only, the `local` session only, never creates it, 502 on a failed capture.
 - **Devices.** `GET /api/devices/apk[/info]` (absent = `available: false`),
@@ -332,7 +335,7 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `projects`, `mailStart`, `max`, a rule failure is 400 with the rule's message; `GET` also
   answers `mail`, whether messaging is on) and `POST /api/boxes/:id/workers/start` `{ project? }`
   (the starter, `mailStart` not applied; 409 setup-running/worker-cap, 400 no-project, else 502,
-  each `{ error, code }`; a success awaits a best-effort `probeOne`). Browser session only, as
+  each `{ error, code }`; a success awaits a best-effort `probeOne`, then `refreshAgents`). Browser session only, as
   the mail routes; they work with messaging off, 503 only when the worker store or starter
   could not be built. Test: `test/agentWorkerRoutes.test.js`.
 - **Responses.** `/api/` sets `Cache-Control: no-store` unless a route already set its own (the
@@ -391,7 +394,8 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   no pane could be placed) and panes. `LOCAL_BOX_ID` is declared here to keep node-pty
   out of the poller's import chain. `NO_SERVER_RE` reads only "no server running" or a socket
   that does not exist as an empty listing; any other tmux error (refused, permission denied) is
-  "listing unknown", never "every session ended".
+  "listing unknown", never "every session ended"; pane rows with no session rows leave `panes`
+  out, as the box probe does.
 - `uploads.js` — paste/drag-drop uploads: filename allowlist, remote
   `~/.tmuxifier-uploads/` writer (24h self-prune). Route `POST /api/upload`
   (`TMUXIFIER_UPLOAD_MAX_MB`); it and `POST /api/voice` take `?session=` (the pane's own session —
@@ -618,8 +622,12 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   one entry per pane and no fold: a five-field marker counts only while a complete listing shows
   its pane in its session off a shell (two markers for one pane: the newer that passes), and an
   absent or capped listing fails open. A session-wide marker (four fields, or the legacy three)
-  applies to every agent pane of its session with no marker of its own, and to nothing without a
-  complete listing. `cleanWindowName` strips C0/C1 and bidi controls; `__NO_TMUX__` matches as a whole line.
+  applies to every agent pane of its session with no marker of its own (the entry carries `wide:
+  true`, which the history reads and mail ignores), and to nothing without a complete listing.
+  Pane rows with no session rows are an unknown listing (no `panes`), not an empty box. Numbers
+  and names from box output drop, never rewritten: a window or pane index that is not a plain
+  decimal of at most 6 digits drops its row, a marker whose ts is not a positive safe integer or
+  whose session name breaks the session-row rules drops the marker. `cleanWindowName` strips C0/C1 and bidi controls; `__NO_TMUX__` matches as a whole line.
   Session rows must have the `STATUS_FMT` shape (≤200; a name with controls or over 256 chars
   drops, never rewritten); a failed probe's ssh error keeps its last 1024 chars, controls stripped.
   `checkAgents` runs `AGENT_REMOTE` — the probe minus the metrics block and the OSC sweep — and
@@ -670,7 +678,12 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   thresholds (cpu needs two consecutive *sweep* samples). Its edge baseline is bridged across a
   marker gap: an exiting agent removes its marker while still in the foreground, which is what
   triggers the probe, so a pane that had a state keeps it in the baseline (not in the sample)
-  or the exit would never raise `agent-done`. `onChange(cb)` fires when a box's agent
+  or the exit would never raise `agent-done`. A pane whose state last came from its own marker
+  never takes one from a session-wide (`wide`) mark, on the sweep or the real-time path: the
+  history remembers it per box and pane while the pane stays in the baseline (`ownMarked`, in
+  memory), and a read offering such a pane only a session-wide mark is that same gap (an exiting
+  agent beside a writer of its session that has not been re-pushed would otherwise read that
+  writer's state). `onChange(cb)` fires when a box's agent
   map changes, event or not. `markSeen(boxId, pane, ts)` turns that pane `idle` in the latest
   sample immediately. Samples carry `agents` keyed by tmux pane id, only for panes whose command
   `agentKindOf` names (`claude`|`opencode`|`codex`|`pi`|`agy`), and only with a complete pane
@@ -758,7 +771,9 @@ nothing is posted after the final write.
   for an unreachable one). A session "runs an agent" when any pane mark names it, and where it
   needs one word (`who`, the queued phrases) it is the summary of its panes (blocked, working,
   ready). A queued message goes to an open `tmx wait` of that session on its thread, else to
-  **one** waiter of the session whose own pane's marker reads `ready`; the thread's permission is re-checked at every post, read, inbox,
+  **one** waiter of the session whose own pane's marker reads `ready` (so the queued phrase says
+  `queued`, and `who` says `listening`, only for a waiter on a pane whose own marker names the
+  session); the thread's permission is re-checked at every post, read, inbox,
   delivery and policy save, and a thread without it closes `permission withdrawn`. A new waiter of
   a pane ends the older ones of that pane, and re-queues what was handed on that pane or more than
   600 s ago. `pending` is a superset index of where undelivered mail may be, so `boxChanged` after
@@ -1028,7 +1043,7 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   agent pane (`rowKey(boxId, pane)`, named as the sidebar names them; old session-keyed MRU entries
   never match; the preview captures that pane through the pane route's `pane`). A commit goes
   through `jumpToTarget` like a sidebar row: the seen hold first, then the `planCommit` dock, the
-  window-and-pane select and the refresh. The MRU
+  window-and-pane select and the refresh (a pane already focused only docks). The MRU
   is fed by `noteFocusedSession` (the focused agent pane of the focused pane's session), called only
   from `repaintStage`, `syncPaneFocus` and `repaintFromSeries`, never while a jump holds the box. Inert in phone mode, under a coarse pointer,
   with a modal open or while Settings records a combo. `settingsHotkeys.ts` is the Hotkeys tab.
@@ -1046,17 +1061,23 @@ are split into a pure half (unit-tested) and a DOM half (Playwright).
   `latestAgents`, `agentRows` (the naming rule, pinned equal to the MCP server's copy by
   `test/agentNaming.test.js` and mirrored by the Android app: `<window index>:<window name>`, `.<pane index>` only when the window holds
   more than one agent entry, `<session> › ` only when the box's agents span sessions; ordered by
-  session, window, pane), `worstOf` (display summaries only), `sessionAgents`, `windowAgents`,
+  session, window, pane; a row's `suffix` is its `.<pane index>`, which `dom.ts` `paintAgentName`
+  renders in its own span so the window name is what an ellipsis cuts), `worstOf` (display summaries only), `sessionAgents`, `windowAgents`,
   `visibleDone`, `eventPlace`, `agentChipText`, `agentCounts` (panes), `agentCards`, `fmtAge`;
   every agent surface folds through it). `agentJump.ts` (pure half of a jump to an agent pane:
   `jumpTargetOf` takes `{ session, windowId, focused }` from the pane's own entry, never from a
   row's text; `needsSelect` (only an already-focused pane skips the select); `sidebarAgents`/
-  `sidebarSeries` keep only the Host Shell's `local` session; `createSeenHold` holds a box's
+  `sidebarSeries` keep only the Host Shell's `local` session, the basis of the sidebar, the
+  standby board and their jumps; `createSeenHold` holds a box's
   acknowledgements from before the dock until a series fetched after the select shows the pane
-  visible, `HOLD_MAX_MS` at most). In `main.ts` a box's agents are `li.box-agents` child rows
+  visible, `HOLD_MAX_MS` at most; a pane-header pick of a window in another session holds the same
+  way with a window cover (`beginWindow`: nothing of that session outside the window visible), and
+  a refused pick cancels at once; a later jump of a box supersedes its earlier ones: once every
+  select settled, the latest begun jump's cover releases them all). In `main.ts` a box's agents are `li.box-agents` child rows
   (one `button.box-agent` per row, repainted in place, `textContent` only) after its `li.box`, the
   Host Shell's in `ul.local-agents`; a row or board card calls `jumpToAgent` → `jumpToTarget`
-  (seen hold, dock on the session, `POST …/window` with `paneId` unless focused, refresh), and
+  (seen hold, dock on the session, `POST …/window` with `paneId`, then `pollStatusAfter`, a poll
+  whose series fetch starts after the settle; a pane already focused only docks), and
   `reportSeen` posts one `agent-seen` per `visibleDone` pane and marker ts. The attention strip
   counts panes and its filter keeps a box with any pane in that state.
 - **Agent messaging** — rendered only when `GET /api/ui-config` says `agentMail: true`
@@ -1137,7 +1158,10 @@ a terminal (design: `docs/superpowers/specs/2026-08-09-android-agent-console-des
 (`agentRows` mirrors the browser's row naming, `ackNext`, `planJump`), `keys/` (`armReduce`,
 `sendTextOf` mirror the web/server) and `session/` are pure and JVM-tested; `api/` is OkHttp + a
 Keystore token store. The app acknowledges (`agent-seen`) the pane its session screen shows, only
-while that screen is in front. Push and intent extras (the main activity is exported) are read
+while that screen is in front; only 401/403/404 settle an acknowledgement, anything else is
+retried, a failed key spaced 5 s doubling to 60 s (`ackNext`/`ackFinished`, time passed in). A
+foreground notification is posted in the background push's slot (`notificationSlotOf`: the
+server's `<boxId>:<pane>` tag and id 0, as the Firebase SDK posts it), so a pane holds one. Push and intent extras (the main activity is exported) are read
 only through `pushTargetOf`, which validates the box id and builds a `JumpTarget` only through
 `jumpTargetOf`; a tap never repoints a box at a session the server does not list. Build with Gradle (`android/README.md`: toolchain, memory caps,
 signing, the **keystore backup obligation**), separate from `npm test`; Compose UI is validated on

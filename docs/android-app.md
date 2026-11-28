@@ -93,7 +93,9 @@ Sign out only forgets the token locally.
   session screen is in front (the app on screen and the session sheet closed) and the pane on screen
   reads `done`, the app tells the server you have seen it, and it turns `idle` everywhere,
   the browser included. Nothing is acknowledged with the app in the background or the screen
-  off, and agents in the session's other windows stay `done` until you look at them.
+  off, and agents in the session's other windows stay `done` until you look at them. If telling
+  the server fails (no connection, or the server briefly did not have the pane), the app tries
+  again while you stay on the screen, waiting a little longer after each failure (up to a minute).
 - **Settings** — server/device identity, per-kind notification toggles, font size, sign out.
 
 ## Push notifications
@@ -109,7 +111,7 @@ toggles only for finished-turn and exited; it has none for the blocked push).
 A notification names the agent's pane: its text gives the box and where the agent is, as
 `session › window`, with the pane's number added when that window holds several agents. Each agent
 keeps its own, so two agents on one box do not replace each other, while a newer notification
-from the same agent replaces its older one. **Tapping a notification** takes you to that agent
+from the same agent replaces its older one, whether it arrived with the app open or not. **Tapping a notification** takes you to that agent
 the way a row tap on the fleet list does (the session if it differs, the window and pane, then
 the session screen), but only if the server still lists that session and window; if either is
 gone, the box simply opens where it points now. A notification from a server that has not been
@@ -142,7 +144,15 @@ such a request can still change a box's configured session and switch its window
 moves every viewer of that session, the browser included. It cannot type anything, read anything
 out, or reach a box or session the server does not list, and the app comes to the front when it
 happens. Before version 1.3.0 such a request could only open a box. Whether that is acceptable on
-a given phone is for you to decide.
+a given phone is for you to decide. Two more facts bear on it:
+
+- Such a request has to carry the box's internal id, a long random value that is never shown on
+  the phone and is not in any notification's text. And Android does not let an app in the
+  background start another app's screen, so the sending app has to be in front, or get you to tap
+  something of its own.
+- The request itself cannot type, but changing a box's configured session changes where your own
+  later input from the app goes: the keys and text you send, uploads and dictation all use the
+  configured session. The browser's terminals for that box reconnect when it changes.
 
 ## Building and releasing
 

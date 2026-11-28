@@ -77,9 +77,18 @@ background windows included. They all report the same four states:
 - **idle** — the agent just started, or a finished turn you have looked at.
 
 Two agents in split panes, or in two windows of one session, are two agents: each has its own
-state, its own notifications and its own row. Claude Code boxes need nothing for this. Codex, pi,
-Antigravity and OpenCode report per pane only once setup has been rerun on the box; until then all
-such agents in one tmux session share one state.
+state, its own notifications and its own row. Claude Code boxes set up since v1.24.82 (when the
+hook started writing one marker per pane) need nothing for this; a Claude box set up before that
+shares one state per session until setup is rerun. Codex, pi, Antigravity and OpenCode report per
+pane only once setup has been rerun on the box; until then all such agents in one tmux session
+share one state.
+
+**After upgrading the server**, rerun setup on every box that runs Codex, pi, Antigravity or
+OpenCode: until you do, all such agents in one tmux session share one state, and one agent's
+change notifies for each of them. Then reload any browser tab that was open across the upgrade.
+
+A box with 400 or more tmux panes shows no agent state at all: the pane listing is capped at 400
+rows, and a capped listing is not trusted.
 
 **Grouped tmux sessions** (made with `tmux new-session -t`, which Tmuxifier never does itself)
 show the same pane in each session of the group. Tmuxifier tracks such a pane under one of those
