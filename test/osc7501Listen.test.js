@@ -28,15 +28,21 @@ function setup({ sessions = { 5: 'web' }, before } = {}) {
   const stub = makeStubTmux(stubDir, { sessionOf: sessions });
   const markerOf = (s, pane = '%5') => path.join(home, '.tmuxifier-agent', `${s}${pane}`);
   const legacyOf = (s) => path.join(home, '.tmuxifier-agent', s);
-  const entryFile = path.join(home, '.tmuxifier-osc', 'panes', '5');
-  if (before) before({ home, markerOf, legacyOf, entryFile });
-  const child = spawn('python3', [ASSET, 'listen', '%5'], {
-    env: { HOME: home, PATH: `${stubDir}:${process.env.PATH}`, ...stub.env },
-    stdio: ['pipe', 'ignore', 'ignore'],
-  });
-  kids.push(child);
-  const exited = new Promise((r) => child.once('exit', (code) => r(code)));
-  return { home, stub, child, exited, markerOf, legacyOf, entryFile, send: (b) => child.stdin.write(b) };
+  const entryOfPane = (pane) => path.join(home, '.tmuxifier-osc', 'panes', pane.slice(1));
+  const entryFile = entryOfPane('%5');
+  if (before) before({ home, markerOf, legacyOf, entryFile, entryOfPane });
+  // Another listener in the same home and stub tmux (a sibling pane's).
+  const listen = (pane) => {
+    const child = spawn('python3', [ASSET, 'listen', pane], {
+      env: { HOME: home, PATH: `${stubDir}:${process.env.PATH}`, ...stub.env },
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+    kids.push(child);
+    const exited = new Promise((r) => child.once('exit', (code) => r(code)));
+    return { child, exited, send: (b) => child.stdin.write(b) };
+  };
+  const { child, exited, send } = listen('%5');
+  return { home, stub, child, exited, markerOf, legacyOf, entryFile, entryOfPane, listen, send };
 }
 
 async function waitFor(fn, ms = 2000) {
@@ -296,7 +302,7 @@ test('a non-ASCII session name is sanitised byte for byte, like the hook', async
   await t.exited;
 });
 
-test('an inherited session-wide line for a non-ASCII session finds the file the older listener named per character, and EOF releases it', async () => {
+test('an inherited session-wide line for a non-ASCII session finds the file the older listener named per character, and migration releases it', async () => {
   const OLD = 'café:working:1:prompt\n';
   const t = setup({ sessions: { 5: 'café' }, before: (p) => {
     mkdirSync(path.dirname(p.entryFile), { recursive: true });
@@ -307,10 +313,124 @@ test('an inherited session-wide line for a non-ASCII session finds the file the 
       lastWritten: OLD, handover: true, attachedAt: 1,
     }));
   } });
-  await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).pid === t.child.pid);
-  expect(readFileSync(t.legacyOf('caf_'), 'utf8')).toBe(OLD);
+  // The pane file takes the per-byte name; the old line is carried, ts included.
+  await waitFor(() => readIf(t.markerOf('caf__')) === 'café:working:1:prompt:%5\n');
+  expect(existsSync(t.legacyOf('caf_'))).toBe(false);
   t.child.stdin.end();
   expect(await t.exited).toBe(0);
-  expect(existsSync(t.legacyOf('caf_'))).toBe(false);
+  expect(existsSync(t.markerOf('caf__'))).toBe(false);
   expect(existsSync(t.entryFile)).toBe(false);
+});
+
+const LEGACY = 'web:working:1700000000:prompt\n';
+// The entry a listener of the previous asset version leaves for its successor.
+const legacyEntry = (over = {}) => JSON.stringify({
+  sha: 'old', session: 'web', records: { '': { state: 'working', kind: null } },
+  lastWritten: LEGACY, handover: true, attachedAt: 1, ...over,
+});
+// `files(p)` returns { <absolute path>: <content> } to write before the listener starts.
+const plant = (entry, files = () => ({})) => (p) => {
+  mkdirSync(path.dirname(p.entryFile), { recursive: true });
+  mkdirSync(path.dirname(p.legacyOf('web')), { recursive: true });
+  writeFileSync(p.entryFile, entry);
+  for (const [file, content] of Object.entries(files(p))) writeFileSync(file, content);
+};
+const entryOf = (t) => JSON.parse(readFileSync(t.entryFile, 'utf8'));
+
+test('migration: a session-wide marker still ours is removed and carried to the pane file with its state, cause and ts', async () => {
+  const t = setup({ before: plant(legacyEntry(), (p) => ({ [p.legacyOf('web')]: LEGACY })) });
+  const NEW = 'web:working:1700000000:prompt:%5\n';
+  await waitFor(() => readIf(t.markerOf('web')) === NEW);
+  expect(existsSync(t.legacyOf('web'))).toBe(false);
+  await waitFor(() => entryOf(t).pid === t.child.pid && entryOf(t).lastWritten === NEW);
+  t.send(osc('state=idle'));
+  await waitMarker(t, 'web', /^web:ready:\d+:stop:%5\n$/); // the fold continues: a finished turn, not a first observation
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(existsSync(t.markerOf('web'))).toBe(false);
+});
+
+test('migration: a session-wide file someone else rewrote is kept; the pane file comes from the inherited records', async () => {
+  const OTHER = 'web:blocked:5:permission\n'; // an older sibling listener's fold, or the hook's
+  const t = setup({ before: plant(legacyEntry(), (p) => ({ [p.legacyOf('web')]: OTHER })) });
+  const c = await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
+  expect(c).not.toBe('web:working:1700000000:prompt:%5\n'); // not ours: nothing of the old line is carried
+  expect(readFileSync(t.legacyOf('web'), 'utf8')).toBe(OTHER);
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(readFileSync(t.legacyOf('web'), 'utf8')).toBe(OTHER);
+});
+
+test('migration: a legacy line that was a sibling\'s fold is removed, and the pane file says what this pane\'s own records say', async () => {
+  const FOLD = 'web:blocked:1700000000:permission\n';
+  const entry = legacyEntry({ records: { '': { state: 'idle', kind: null } }, lastWritten: FOLD });
+  const t = setup({ before: plant(entry, (p) => ({ [p.legacyOf('web')]: FOLD })) });
+  await waitMarker(t, 'web', /^web:ready:\d+:start:%5\n$/);
+  expect(existsSync(t.legacyOf('web'))).toBe(false);
+  t.child.stdin.end();
+  await t.exited;
+});
+
+test('migration: a pane file that already exists is not touched', async () => {
+  const HOOK = 'web:blocked:9:question:%5\n';
+  const t = setup({ before: plant(legacyEntry(), (p) => ({ [p.legacyOf('web')]: LEGACY, [p.markerOf('web')]: HOOK })) });
+  await waitFor(() => entryOf(t).pid === t.child.pid);
+  await waitFor(() => !existsSync(t.legacyOf('web')));
+  await new Promise((r) => setTimeout(r, 300));
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe(HOOK);
+  expect(entryOf(t).lastWritten).toBe(null);
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe(HOOK);
+});
+
+test('migration when tmux cannot name the pane\'s session: the inherited session is used; with none, only the owned file goes', async () => {
+  const a = setup({ sessions: {}, before: plant(legacyEntry(), (p) => ({ [p.legacyOf('web')]: LEGACY })) });
+  await waitFor(() => readIf(a.markerOf('web')) === 'web:working:1700000000:prompt:%5\n');
+  expect(existsSync(a.legacyOf('web'))).toBe(false);
+  a.child.stdin.end();
+  expect(await a.exited).toBe(0);
+
+  const b = setup({ sessions: {}, before: plant(legacyEntry({ session: undefined }), (p) => ({ [p.legacyOf('web')]: LEGACY })) });
+  await waitFor(() => entryOf(b).pid === b.child.pid);
+  await waitFor(() => !existsSync(b.legacyOf('web')));
+  expect(existsSync(b.markerOf('web'))).toBe(false);
+  expect(entryOf(b).lastWritten).toBe(null);
+  b.child.stdin.end();
+  expect(await b.exited).toBe(0);
+});
+
+test('migration with sibling panes: each successor writes its own pane file from its records at start, whether or not it owned the session-wide file', async () => {
+  // Two panes of `web`, both handed over from older listeners. The
+  // session-wide file holds what B's old listener wrote last, so only B can
+  // prove it is ours; A must still get its own marker without new output.
+  const A_OLD = 'web:blocked:1699999000:permission\n';
+  const B_OLD = 'web:working:1700000000:prompt\n';
+  const t = setup({ sessions: { 5: 'web', 7: 'web' }, before: (p) => {
+    mkdirSync(path.dirname(p.entryFile), { recursive: true });
+    mkdirSync(path.dirname(p.legacyOf('web')), { recursive: true });
+    writeFileSync(p.entryOfPane('%5'), JSON.stringify({
+      sha: 'old', session: 'web', records: { '': { state: 'blocked', kind: 'permission' } },
+      lastWritten: A_OLD, handover: true, attachedAt: 1,
+    }));
+    writeFileSync(p.entryOfPane('%7'), JSON.stringify({
+      sha: 'old', session: 'web', records: { '': { state: 'working', kind: null } },
+      lastWritten: B_OLD, handover: true, attachedAt: 1,
+    }));
+    writeFileSync(p.legacyOf('web'), B_OLD);
+  } });
+  const b = t.listen('%7');
+  await waitMarker(t, 'web', /^web:blocked:\d+:permission:%5\n$/);
+  await waitFor(() => readIf(t.markerOf('web', '%7')) === 'web:working:1700000000:prompt:%7\n');
+  await waitFor(() => !existsSync(t.legacyOf('web')));
+  const entryB = () => JSON.parse(readFileSync(t.entryOfPane('%7'), 'utf8'));
+  await waitFor(() => entryOf(t).pid === t.child.pid && entryB().pid === b.child.pid);
+  expect(entryOf(t).lastWritten).toBe(readFileSync(t.markerOf('web'), 'utf8'));
+  expect(entryB().lastWritten).toBe('web:working:1700000000:prompt:%7\n');
+  t.child.stdin.end();
+  b.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(await b.exited).toBe(0);
+  expect(existsSync(t.markerOf('web'))).toBe(false);
+  expect(existsSync(t.markerOf('web', '%7'))).toBe(false);
 });

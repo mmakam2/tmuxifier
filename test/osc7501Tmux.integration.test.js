@@ -1,7 +1,7 @@
 import { test, expect, afterEach } from 'vitest';
 import {
   mkdtempSync, mkdirSync, copyFileSync, chmodSync, writeFileSync, appendFileSync, readFileSync,
-  existsSync, rmSync,
+  existsSync, rmSync, renameSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -329,4 +329,37 @@ test('three codex panes of one session, one split and one in a background window
   expect(reads('%0', /^web:working:\d+:prompt:%0\n$/)).toBe(true);
   expect(reads('%2', /^web:ready:\d+:start:%2\n$/)).toBe(true);
   expect(existsSync(h.legacy)).toBe(false); // nothing writes a session-wide file any more
+});
+
+test('a handover whose entry carries an older listener\'s session-wide marker migrates it to the pane file', async () => {
+  const h = await harness();
+  h.sweep();
+  const first = await waitFor(() => { const e = h.readEntry(); return e && typeof e.pid === 'number' ? e : null; }, { what: 'listener claim' });
+  h.report('state=working:app=codex');
+  await waitFor(() => /^web:working:\d+:prompt:%0\n$/.test(readIf(h.marker) || ''), { what: 'working marker' });
+
+  // Leave the box as the previous asset version would have: a session-wide
+  // file, the same line as the entry's lastWritten, and no pane file. The
+  // entry is replaced by rename so the loop's unlocked read never sees half a file.
+  const LEGACY = 'web:working:1700000000:prompt\n';
+  writeFileSync(h.legacy, LEGACY);
+  writeFileSync(`${h.entry}.t`, JSON.stringify({ ...h.readEntry(), lastWritten: LEGACY }));
+  renameSync(`${h.entry}.t`, h.entry);
+  rmSync(h.marker);
+
+  appendFileSync(h.installed, '\n# rerun\n'); // a setup rerun: the next sweep replaces the loop, the new loop hands over
+  const sha2 = shaOf(h.installed);
+  h.sweep();
+  const second = await waitFor(() => {
+    const e = h.readEntry();
+    return e && e.sha === sha2 && typeof e.pid === 'number' && e.pid !== first.pid ? e : null;
+  }, { what: 'successor claim' });
+  const NEW = 'web:working:1700000000:prompt:%0\n';
+  await waitFor(() => readIf(h.marker) === NEW, { what: 'migrated pane marker' });
+  expect(existsSync(h.legacy)).toBe(false);
+  await waitFor(() => h.readEntry().lastWritten === NEW, { what: 'entry lastWritten' });
+  expect(h.procs('listen %0')).toEqual([second.pid]);
+
+  h.report('state=idle:app=codex');
+  await waitFor(() => /^web:ready:\d+:stop:%0\n$/.test(readIf(h.marker) || ''), { what: 'ready:stop marker' });
 });

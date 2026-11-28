@@ -324,6 +324,21 @@ def own_marker_path(home, pane_id, last_written):
     return None
 
 
+_LEGACY_LINE = re.compile(r'([^:\n]+):(working|blocked|ready):([0-9]{1,12}):([a-z]{1,16})\n?')
+
+
+def _legacy_fields(last_written):
+    """(session, state, ts, cause) of an older listener's four-field
+    session-wide line, or None for anything else (this version's five-field
+    line, junk, None)."""
+    if not isinstance(last_written, str):
+        return None
+    m = _LEGACY_LINE.fullmatch(last_written)
+    if m is None:
+        return None
+    return (m.group(1), m.group(2), int(m.group(3)), m.group(4))
+
+
 def read_marker(path):
     """(state, cause) from the marker's first line, or None."""
     try:
@@ -471,8 +486,32 @@ def _bare_clear(home, pane_id, last_written):
 # predecessor's) is never touched; a session-wide file or another pane's file
 # is never looked at. A seeded start (handover, or a listener restarted on a
 # pane whose entry still holds records/lastWritten) never writes before its
-# first chunk. The replay harness models the chunk gate only, so its trail shows
-# ready/start at the agent's own idle report, not at attach.
+# first chunk, except by the migration below. The replay harness models the
+# chunk gate only, so its trail shows ready/start at the agent's own idle
+# report, not at attach.
+#
+# Session-wide markers (migration). A listener of an older asset version kept
+# ONE marker per session, ~/.tmuxifier-agent/<safe session>, four fields, the
+# fold of every sibling pane's records; a handover hands its successor that
+# line as lastWritten (_legacy_fields recognises it). At start-up, before the
+# attach seed (which a migrating listener never also runs), the successor
+# removes that file only while its content still equals the inherited line,
+# the bare-clear rule: by name alone it may be a sibling's or the hook's.
+# Whether or not the file was its own, it then gives its PANE its own marker
+# from the inherited records: in a session with sibling panes only the last
+# old writer's successor can prove the file, and every other pane would have
+# no state until its next chunk. The old line is carried, ts included, only
+# when it was ours and says what this pane's records fold to (it was a fold of
+# sibling panes, so it may not); otherwise the pane file is the first
+# observation of those records. A pane file that exists (the hook's, a newer
+# listener's) is left alone. When tmux cannot name the pane's session the
+# entry's session is used; with neither, only the owned file goes. For the one
+# pass in which both versions run, an old listener not yet handed over may
+# rewrite the session-wide file after a sibling's successor removed it; it
+# persists that line, so its own successor inherits and removes it. The
+# server applies a four-field file only to agent panes of that session that
+# have no marker of their own, so such a file reads correctly meanwhile (and
+# one written too late to be persisted stays inert beside the pane files).
 # --------------------------------------------------------------------------
 
 class PaneReader:
@@ -524,6 +563,7 @@ def run_listen(pane_id, *, home, stdin_fd=0):
     reader = PaneReader(Records.from_json(entry.get('records')))
     lw = entry.get('lastWritten')
     last_written = lw if isinstance(lw, str) else None
+    fresh = not entry.get('records') and last_written is None
     ses = entry.get('session')
     session = ses if isinstance(ses, str) else None
     gen = entry.get('attachedAt') if _is_num(entry.get('attachedAt')) else time.time()
@@ -551,10 +591,36 @@ def run_listen(pane_id, *, home, stdin_fd=0):
         except Exception as e:
             debug(home, 'persist: %r' % (e,))
 
+    # Migration (protocol block): the entry was last written by a listener
+    # that kept ONE marker per session. Remove that file if it is still ours,
+    # then give this pane its own marker from the inherited records.
+    legacy = _legacy_fields(last_written)
+    if legacy is not None:
+        try:
+            ours = _bare_clear(home, pane_id, last_written) is None
+            last_written = None
+            s = resolve_session(pane_id) or session
+            if s is not None:
+                session = s
+                mpath = marker_path(home, s, pane_id)
+                if not os.path.exists(mpath):
+                    own = reader.recs.fold()
+                    want = 'ready' if own[0] == 'idle' else own[0]
+                    same = (ours and legacy[1] == want
+                            and (want != 'blocked' or CAUSE_KIND.get(legacy[3]) == (own[1] or 'permission')))
+                    if same:
+                        # The old line described this pane: carry it, ts included.
+                        last_written = write_marker(mpath, s, legacy[1], legacy[3], pane_id, ts=legacy[2])
+                    else:
+                        act = next_action(None, own)
+                        last_written = write_marker(mpath, s, act[1], act[2], pane_id)
+        except Exception as e:
+            debug(home, 'migrate: %r' % (e,))
+
     # Attach seed (protocol block): a FRESH attach — no records and no
     # lastWritten to seed from — whose pane has no marker file yet writes the
     # first observation itself (idle: always ready/start).
-    if not entry.get('records') and last_written is None:
+    if fresh:
         try:
             s = resolve_session(pane_id)
             if s is not None:
