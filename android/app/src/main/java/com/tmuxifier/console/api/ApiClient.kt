@@ -8,6 +8,7 @@ package com.tmuxifier.console.api
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -28,6 +29,15 @@ internal fun killBody(session: String, windowId: String?): String = buildJsonObj
     put("session", session)
     if (windowId != null) put("windowId", windowId)
 }.toString()
+
+// A body this build cannot read is a failed request, not a crash: a decode
+// failure used to escape every `catch (e: ApiException)`. Status 0 is what the
+// screens already treat as "retry", so it shows as offline instead.
+internal fun <T> decodeResponse(s: DeserializationStrategy<T>, text: String): T = try {
+    ApiJson.decodeFromString(s, text)
+} catch (_: SerializationException) {
+    throw ApiException(0, "unexpected response from the server")
+}
 
 internal val defaultHttpClient: OkHttpClient =
     OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
@@ -71,7 +81,7 @@ class ApiClient(
             }
         }
 
-    private fun <T> parse(s: DeserializationStrategy<T>, text: String): T = ApiJson.decodeFromString(s, text)
+    private fun <T> parse(s: DeserializationStrategy<T>, text: String): T = decodeResponse(s, text)
 
     suspend fun enroll(code: String, name: String, fcmToken: String? = null): EnrollResponse {
         val body = buildJsonObject {

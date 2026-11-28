@@ -4,6 +4,8 @@ package com.tmuxifier.console.api
 // optional field is defaulted and unknown keys are ignored (ApiJson): the
 // server adds fields over time and an old app must keep parsing. `notify`
 // stays a Map — notification kinds are server-defined, never enumerated here.
+// `agents` is keyed by tmux pane id, and an entry that does not fit is dropped by
+// `agent/AgentRows.kt`, never here.
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
@@ -69,12 +71,29 @@ data class BoxStatus(
     val error: String? = null,
 )
 
+// One agent pane of a sample, keyed by pane id ("%12") in Sample.agents. Only
+// the fields the app renders are read; the server's agent, ts, visible, focused
+// and attached are deliberately left out. Every field is nullable because a
+// server that predates pane-level state keys `agents` by SESSION name with
+// entries of another shape, and those must decode (to entries with no window).
+@Serializable
+data class AgentEntry(
+    val session: String? = null,
+    val windowId: String? = null,
+    val windowIndex: Int? = null,
+    val windowName: String? = null,
+    val paneIndex: Int? = null,
+    val state: String? = null,
+    val cause: String? = null,
+)
+
 @Serializable
 data class Sample(
     val t: Long,
     val up: Boolean,
     val stopped: Boolean? = null,
     val agent: String? = null,
+    val agents: Map<String, AgentEntry> = emptyMap(),
     val cpuPct: Int? = null,
     val memPct: Int? = null,
     val diskPct: Int? = null,
@@ -96,6 +115,11 @@ data class PaneSnapshot(
     val mouse: Boolean = false,
     val content: String = "",
     val agent: String? = null,
+    // The captured pane's agent cause, its id ("%12") and its marker's ts, when
+    // the server knows them; an older server sends none.
+    val agentCause: String? = null,
+    val pane: String? = null,
+    val agentTs: Long? = null,
     val sessionName: String? = null,
 )
 

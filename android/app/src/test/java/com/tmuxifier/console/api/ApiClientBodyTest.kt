@@ -4,6 +4,7 @@ package com.tmuxifier.console.api
 // MockWebServer in this module, so the calls themselves are device-validated.
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class ApiClientBodyTest {
     @Test fun sessionKillOmitsWindowIdEntirely() {
@@ -16,5 +17,14 @@ class ApiClientBodyTest {
         // Always session-qualified: a grouped session shares window objects, so
         // a bare @3 names two windows and tmux picks whichever it finds first.
         assertEquals("""{"session":"web","windowId":"@3"}""", killBody("web", "@3"))
+    }
+
+    @Test fun aResponseThatDoesNotDecodeIsAnApiException() {
+        val e = assertFailsWith<ApiException> { decodeResponse(seriesMapSerializer, """{"b1":[{"t":"soon","up":true}]}""") }
+        assertEquals(0, e.status)
+    }
+
+    @Test fun aResponseThatDecodesIsReturned() {
+        assertEquals(1L, decodeResponse(seriesMapSerializer, """{"b1":[{"t":1,"up":true}]}""")["b1"]!!.single().t)
     }
 }

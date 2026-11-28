@@ -13,6 +13,7 @@ import com.tmuxifier.console.api.TmuxSession
 // only decide what the sheet offers.
 val SESSION_NAME_RE = Regex("^[A-Za-z0-9_-]{1,64}$")
 val WINDOW_ID_RE = Regex("^@\\d{1,9}$")
+val PANE_ID_RE = Regex("^%\\d{1,9}$")
 
 const val UNSWITCHABLE = "name not usable from here (allowed: letters, digits, _ -)"
 const val UNADDRESSABLE_WINDOW = "window id not usable from here"

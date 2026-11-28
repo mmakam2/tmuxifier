@@ -258,4 +258,9 @@ class SessionTargetsTest {
         assertEquals(RowAction.SWITCH, rowAction(t.first { it.value == "s:alpha" }))
         assertEquals(RowAction.SWITCH, rowAction(t.first { it.value == "w:web:@0" }))
     }
+
+    @Test fun paneIdsAreAPercentSignAndOneToNineDigits() {
+        for (ok in listOf("%0", "%12", "%123456789")) assertTrue(PANE_ID_RE.matches(ok), ok)
+        for (bad in listOf("", "%", "12", "@3", "%1a", " %1", "%1 ", "%1234567890", "%-1")) assertFalse(PANE_ID_RE.matches(bad), bad)
+    }
 }

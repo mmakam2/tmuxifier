@@ -4,6 +4,7 @@ package com.tmuxifier.console.api
 // unknown fields must be ignored — the server adds fields over time.
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ModelsTest {
@@ -74,5 +75,47 @@ class ModelsTest {
         // list would pass the test above just as well.
         val m = ApiJson.decodeFromString(statusMapSerializer, """{"b1":{"reachable":true}}""")
         assertTrue(m["b1"]?.sessions?.isEmpty() == true)
+    }
+
+    @Test fun seriesCarriesPaneKeyedAgents() {
+        val s = ApiJson.decodeFromString(seriesMapSerializer,
+            """{"b1":[{"t":1723180000000,"up":true,"agents":{"%12":{"session":"main","windowId":"@3","windowIndex":2,"windowName":"frontend","paneIndex":1,"agent":"claude","state":"blocked","cause":"permission","ts":1723180000,"visible":true,"focused":false,"attached":true},"%14":{"session":"main","windowId":"@4","windowIndex":3,"windowName":"","paneIndex":0,"agent":"codex","visible":false,"focused":false,"attached":true}}}]}""")
+        val agents = s["b1"]!!.last().agents
+        assertEquals(setOf("%12", "%14"), agents.keys)
+        assertEquals(
+            AgentEntry(session = "main", windowId = "@3", windowIndex = 2, windowName = "frontend", paneIndex = 1, state = "blocked", cause = "permission"),
+            agents["%12"],
+        )
+        assertNull(agents["%14"]?.state) // an agent pane with no marker carries no state
+    }
+
+    @Test fun olderServerSampleHasNoAgentsKey() {
+        val s = ApiJson.decodeFromString(seriesMapSerializer, """{"b1":[{"t":1,"up":true,"agent":"working","agentPresent":true}]}""")
+        assertTrue(s["b1"]!!.last().agents.isEmpty())
+    }
+
+    @Test fun sessionKeyedAgentsOfTheCurrentServerDecode() {
+        // What the server sends before plan 1: keyed by SESSION name, another entry shape.
+        val s = ApiJson.decodeFromString(seriesMapSerializer,
+            """{"b1":[{"t":1,"up":true,"agent":"working","agentPresent":true,"agentAttached":false,"agents":{"main":{"present":true,"attached":false,"agent":"claude","state":"working","cause":"prompt","ts":1723180000},"logs":{"present":false,"attached":true}}}]}""")
+        assertEquals(setOf("main", "logs"), s["b1"]!!.last().agents.keys)
+        assertNull(s["b1"]!!.last().agents["main"]?.windowId)
+    }
+
+    @Test fun paneSnapshotCarriesItsPaneAndMarkerTs() {
+        val snap = ApiJson.decodeFromString(PaneSnapshot.serializer(),
+            """{"ok":true,"width":80,"height":24,"cursorX":0,"cursorY":0,"content":"x","agent":"blocked","agentCause":"permission","pane":"%12","agentTs":1723180000,"sessionName":"main"}""")
+        assertEquals("blocked", snap.agent)
+        assertEquals("permission", snap.agentCause)
+        assertEquals("%12", snap.pane)
+        assertEquals(1723180000L, snap.agentTs)
+    }
+
+    @Test fun olderServerPaneSnapshotHasNeitherPaneNorTs() {
+        val snap = ApiJson.decodeFromString(PaneSnapshot.serializer(),
+            """{"ok":true,"width":80,"height":24,"cursorX":0,"cursorY":0,"content":"x","agent":null,"agentCause":null,"sessionName":"main"}""")
+        assertNull(snap.pane)
+        assertNull(snap.agentTs)
+        assertNull(snap.agentCause)
     }
 }
