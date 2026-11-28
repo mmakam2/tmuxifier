@@ -129,6 +129,12 @@ describe('osc7501 reporter core', () => {
     expect(py("m.own_marker_path('/h', '%3', 'web:working:1:prompt\\n')")).toBe('/h/.tmuxifier-agent/web');
     expect(py("[m.own_marker_path('/h', '%3', v) for v in ['web:working:1:prompt:%4\\n', 'junk', '', None, 5]]"))
       .toEqual([null, null, null, null, null]);
+    // An older listener named its session-wide file per CHARACTER, the hook and the
+    // per-pane files per BYTE: the two spellings differ on purpose for non-ASCII names.
+    expect(py("m.legacy_marker_path('/h', 'caf\\u00e9')")).toBe('/h/.tmuxifier-agent/caf_');
+    expect(py("m.legacy_marker_path('/h', 'my proj/x')")).toBe('/h/.tmuxifier-agent/my_proj_x');
+    expect(py("m.own_marker_path('/h', '%5', 'caf\\u00e9:working:1:prompt\\n')")).toBe('/h/.tmuxifier-agent/caf_');
+    expect(py("m.own_marker_path('/h', '%5', 'caf\\u00e9:working:1:prompt:%5\\n')")).toBe('/h/.tmuxifier-agent/caf__%5');
     expect(py("[hasattr(m, n) for n in ['session_fold', 'live_entries', '_sibling_folds', 'entry_live']]"))
       .toEqual([false, false, false, false]);
   });

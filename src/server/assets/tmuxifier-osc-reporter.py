@@ -302,8 +302,12 @@ def marker_path(home, session, pane_id):
 
 
 def legacy_marker_path(home, session):
-    """An older listener's session-wide file. Used only to find that file."""
-    return os.path.join(home, '.tmuxifier-agent', _safe_session(session))
+    """An older listener's session-wide file, under the name that listener
+    gave it. Used only to find that file. The older listener sanitised per
+    CHARACTER (é -> one `_`), unlike the hook and the per-pane files (per
+    byte, é -> `__`); only older listeners wrote four-field lines, so their
+    spelling is the one that finds the file. Same for any ASCII name."""
+    return os.path.join(home, '.tmuxifier-agent', re.sub(r'[^A-Za-z0-9._-]', '_', session))
 
 
 def own_marker_path(home, pane_id, last_written):

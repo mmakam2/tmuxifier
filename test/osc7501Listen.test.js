@@ -295,3 +295,22 @@ test('a non-ASCII session name is sanitised byte for byte, like the hook', async
   t.child.stdin.end();
   await t.exited;
 });
+
+test('an inherited session-wide line for a non-ASCII session finds the file the older listener named per character, and EOF releases it', async () => {
+  const OLD = 'café:working:1:prompt\n';
+  const t = setup({ sessions: { 5: 'café' }, before: (p) => {
+    mkdirSync(path.dirname(p.entryFile), { recursive: true });
+    mkdirSync(path.dirname(p.legacyOf('caf_')), { recursive: true });
+    writeFileSync(p.legacyOf('caf_'), OLD); // the old listener's per-character spelling
+    writeFileSync(p.entryFile, JSON.stringify({
+      sha: 'x', session: 'café', records: { '': { state: 'working', kind: null } },
+      lastWritten: OLD, handover: true, attachedAt: 1,
+    }));
+  } });
+  await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).pid === t.child.pid);
+  expect(readFileSync(t.legacyOf('caf_'), 'utf8')).toBe(OLD);
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(existsSync(t.legacyOf('caf_'))).toBe(false);
+  expect(existsSync(t.entryFile)).toBe(false);
+});
