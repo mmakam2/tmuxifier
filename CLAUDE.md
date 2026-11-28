@@ -298,7 +298,8 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   `agentCause`, `agentTs` when it has a marker), plus `pane` and `sessionName`, so a client that
   only sees captures can acknowledge; on an alt-screen pane only the visible screen ships. Optional `cols`/`rows` keep an invisible
   sizing client attached (`sessions.ensureSizedViewer`, rolling ~30s TTL, only after a successful
-  capture). `POST /api/boxes/:id/keys` — exactly one of literal text (`sanitizeSendText`), a
+  capture); such a sized capture also zooms a split pane and restores it when that client exits
+  (`phoneZoom.js`), fired and never awaited, and its `windowState` is never answered. `POST /api/boxes/:id/keys` — exactly one of literal text (`sanitizeSendText`), a
   `NAMED_KEYS` key, or `wheel` (SGR wheel reports; `exit 93` → 409 unless the pane has SGR mouse
   tracking on). `POST /api/boxes/:id/pane-kind` is the mic button's link-vs-dictate verdict.
   An optional `pane=%N` (`PANE_ID_RE`, 400 otherwise; 403 for a device token; 404 when the latest
@@ -380,6 +381,16 @@ Login rate limiting, REST under `/api/*`, the `/term`, `/voice-link` and `/live`
   DEC private modes (mouse, DECCKM, alt screen, bracketed paste — in last-set order) and
   `REPLAY_CLEAR` (SGR reset + clear) — don't rely on the size nudge to clean the screen or
   re-announce modes: over ssh it usually collapses to no resize at all.
+- `phoneZoom.js` — a split pane on a phone: while a sized viewer shows a session, the pane in
+  front of its current window is zoomed (a split pane gets only its share of a phone-sized
+  window), and the zoom is undone when the viewer's client exits. Pure `planZoom` + the stateful
+  `createPhoneZoom({ zoom, unzoom })`, in memory only (a restart leaves a pane zoomed). The three
+  rules in its header are the contract: only a zoom it made is undone; a pane someone unzooms is
+  theirs until another pane comes to the front; one window per viewer. `boxActions`'
+  `buildZoomPaneRemote`/`buildUnzoomWindowRemote` never toggle blind: `resize-pane -Z` runs only
+  behind a strict resolve and a flag check, and the `__ZOOMED__`/`__UNZOOMED__` line is the only
+  licence to claim or undo. Tests: `test/phoneZoom.test.js`, `test/phoneZoom.integration.test.js`
+  (a real private tmux), `test/paneRoutes.test.js`.
 - `localShellActions.js` — the optional Host Shell (`localShell` = `none`/`omz`/`omb`).
   `installAgentHooks()`/`installVoiceLink()` reuse the box pushers over a local `/bin/sh`
   transport, triggered only by `claudeHooks === true` on `PATCH /api/local-shell`;

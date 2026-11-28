@@ -76,7 +76,13 @@ Sign out only forgets the token locally.
   then renders the wide window auto-fitted: full-screen TUIs (Claude Code, vim) never
   soft-wrap — they fit or pan horizontally at intact layout. Plain shell panes keep larger
   soft-wrapped text at the Settings font size. Leaving the session detaches the invisible
-  client within ~30 s; the window keeps its last size until another client acts. The pane is **inert to touch** — scroll and select only. Below it: the
+  client within ~30 s; the window keeps its last size until another client acts. A **split
+  pane** is zoomed while you look at it, so it fills the screen instead of its half of a
+  phone-sized window; a browser on the same window sees it zoomed too. About 30 s after you
+  leave, the server unzooms it again. It only undoes a zoom it made: a window you had already
+  zoomed stays zoomed, and if you unzoom the pane yourself (prefix + z) while the phone is
+  looking, it is left that way until another pane comes to the front. A server restart while
+  the phone is looking leaves the pane zoomed. The pane is **inert to touch** — scroll and select only. Below it: the
   action row (`Esc ↑ ↓ Tab ⏎ 1 2 3 y n`, and `^C` behind a two-tap arm) and the composer — a
   real Android text field where drafting, autocorrect, and voice dictation stay local until
   **Send** (literal text + Enter). Drafts persist per box; empty Send is a bare Enter.

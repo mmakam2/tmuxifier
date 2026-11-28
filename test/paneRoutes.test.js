@@ -11,6 +11,9 @@ import { createPasskeyStore } from '../src/server/passkeyStore.js';
 
 let gate = null;
 let app, dir, calls, boxId, failNext, noMouseNext, captureOut, sizedCalls, setupRunning, snapCalls;
+// The phone's zoom: the window-state line a sized capture gets back, and the callbacks the
+// route hands to sessions.onExit (calling one is "the sized viewer is gone").
+let wzLine, viewerGone;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-pane-'));
   calls = [];
@@ -29,10 +32,14 @@ beforeEach(async () => {
     if (failNext) { failNext = false; return { code: 1, stdout: '', stderr: 'boom' }; }
     if (noMouseNext) { noMouseNext = false; return { code: 93, stdout: '', stderr: '' }; }
     const remote = argv[argv.length - 1];
+    // The zoom and restore scripts (they hold a capture-pane too, as their strict resolve).
+    if (remote.includes('resize-pane -Z')) {
+      return { code: 0, stdout: remote.includes('__UNZOOMED__') ? '__UNZOOMED__\n' : '__ZOOMED__\n', stderr: '' };
+    }
     if (remote.includes('capture-pane')) {
       // The screen is read when the capture STARTS, as tmux does: a capture
       // held at the gate still returns what was on screen before it.
-      const out = captureOut;
+      const out = (remote.includes('__WZ__') ? `${wzLine}\n` : '') + captureOut;
       if (gate) await gate;
       return { code: 0, stdout: out, stderr: '' };
     }
@@ -52,9 +59,19 @@ beforeEach(async () => {
   };
   sizedCalls = [];
   setupRunning = false;
+  wzLine = '__WZ__ @1 0 2';
+  viewerGone = [];
+  // One entry per viewer key, as the real manager keeps it.
+  const sized = new Map();
   const sessions = {
-    open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {}, onExit() {},
-    ensureSizedViewer(args) { sizedCalls.push(args); return {}; },
+    open() {}, attach() {}, write() {}, resize() {}, detach() {}, close() {},
+    onExit(entry, cb) { viewerGone.push(cb); },
+    ensureSizedViewer(args) {
+      sizedCalls.push(args);
+      const key = `${args.box.id}\n${args.clientId}`;
+      if (!sized.has(key)) sized.set(key, {});
+      return sized.get(key);
+    },
   };
   const setupManager = { currentForBox: () => (setupRunning ? { status: 'running' } : null) };
   const statusChecker = { checkBox: async () => ({ reachable: true }), listSessions: async () => ({ reachable: true, sessions: [] }) };
@@ -481,4 +498,92 @@ test('a device read does not join a browser preview of the same session and dept
   expect(calls.filter((a) => a.at(-1).includes('capture-pane')).length).toBe(2);
   open();
   expect((await both).map((r) => r.statusCode)).toEqual([200, 200]);
+});
+
+// --- The phone's split pane: zoom while a sized viewer looks, restore when it goes ---------
+
+const zoomRuns = () => calls.map((a) => a[a.length - 1]).filter((r) => r.includes('resize-pane -Z'));
+// The route fires the zoom without waiting for it; let the queued work run.
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)); };
+const sizedUrl = () => `/api/boxes/${boxId}/pane?cols=48&rows=90&client=dev1`;
+
+test('a sized capture of a split pane zooms that exact pane, and the answer carries no window state', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'GET', url: sizedUrl(), headers: h });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).not.toHaveProperty('windowState');
+  expect(res.json().pane).toBe('%1');
+  await settle();
+  const runs = zoomRuns();
+  expect(runs).toHaveLength(1);
+  expect(runs[0]).toContain(`'=main:@1.%1'`);
+  expect(runs[0]).toContain('__ZOOMED__');
+});
+
+test('a capture with no size asks for no window state and zooms nothing', async () => {
+  const h = await headers();
+  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?lines=40`, headers: h });
+  expect(res.statusCode).toBe(200);
+  await settle();
+  expect(calls.map((a) => a[a.length - 1]).some((r) => r.includes('__WZ__'))).toBe(false);
+  expect(zoomRuns()).toEqual([]);
+});
+
+test('a window that is already zoomed, or holds one pane, is left alone', async () => {
+  const h = await headers();
+  // The last two are what a tmux too old for a format variable prints: the marker, then blanks.
+  for (const line of ['__WZ__ @1 1 2', '__WZ__ @1 0 1', '__WZ__ nonsense', '__WZ__ @1  2', '__WZ__   ']) {
+    wzLine = line;
+    expect((await app.inject({ method: 'GET', url: sizedUrl(), headers: h })).statusCode).toBe(200);
+    await settle();
+  }
+  expect(zoomRuns()).toEqual([]);
+});
+
+test('the viewer going restores the window it zoomed, once, and only that', async () => {
+  const h = await headers();
+  await app.inject({ method: 'GET', url: sizedUrl(), headers: h });
+  await settle();
+  wzLine = '__WZ__ @1 1 2';
+  await app.inject({ method: 'GET', url: sizedUrl(), headers: h });
+  await settle();
+  // One viewer entry, so one exit callback however many captures it served.
+  expect(viewerGone).toHaveLength(1);
+  viewerGone[0]();
+  await settle();
+  const runs = zoomRuns();
+  expect(runs).toHaveLength(2);
+  expect(runs[1]).toContain('__UNZOOMED__');
+  expect(runs[1]).toContain(`'=main:@1'`);
+  // Gone twice is gone once.
+  viewerGone[0]();
+  await settle();
+  expect(zoomRuns()).toHaveLength(2);
+});
+
+test('the viewer going restores nothing when the operator had zoomed the window', async () => {
+  const h = await headers();
+  wzLine = '__WZ__ @1 1 2';
+  await app.inject({ method: 'GET', url: sizedUrl(), headers: h });
+  await settle();
+  viewerGone[0]?.();
+  await settle();
+  expect(zoomRuns()).toEqual([]);
+});
+
+test('no zoom while a setup job runs on the box', async () => {
+  const h = await headers();
+  setupRunning = true;
+  expect((await app.inject({ method: 'GET', url: sizedUrl(), headers: h })).statusCode).toBe(200);
+  await settle();
+  expect(zoomRuns()).toEqual([]);
+  expect(calls.map((a) => a[a.length - 1]).some((r) => r.includes('__WZ__'))).toBe(false);
+});
+
+test('a failed capture zooms nothing', async () => {
+  const h = await headers();
+  failNext = true;
+  expect((await app.inject({ method: 'GET', url: sizedUrl(), headers: h })).statusCode).toBe(502);
+  await settle();
+  expect(zoomRuns()).toEqual([]);
 });

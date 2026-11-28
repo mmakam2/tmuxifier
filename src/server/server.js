@@ -25,6 +25,7 @@ import { createUnifiClient } from './unifiApi.js';
 import { createImmichClient } from './immichApi.js';
 import { validUploadName, storedUploadName, saveLocalUpload } from './uploads.js';
 import { injectLocalUploadPath, injectLocalText as injectLocalTextDefault, paneKindLocal as paneKindLocalDefault, NAMED_KEYS, sanitizeSendText } from './tmuxInject.js';
+import { createPhoneZoom } from './phoneZoom.js';
 import { normalizeTranscript } from './voiceText.js';
 import { MODEL_IDS, resolveModel } from './voiceCatalog.js';
 import { vendorModelPath } from './voicePaths.js';
@@ -1310,6 +1311,14 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     return { results };
   });
 
+  // The phone's split-pane zoom (phoneZoom.js): which sized viewers zoomed what,
+  // and the sized-viewer entries whose exit already carries the restore.
+  const phoneZoom = createPhoneZoom({
+    zoom: async (box, session, windowId, pane) => (await boxActions.zoomPane?.(box, session, windowId, pane))?.ok === true,
+    unzoom: async (box, session, windowId) => (await boxActions.unzoomWindow?.(box, session, windowId))?.ok === true,
+  });
+  const zoomWatched = new WeakSet();
+
   // App-facing pane snapshot: read-only, bounded scrollback, agent state from
   // the health series so the client needs no second request. Every answer says
   // which pane it captured (`pane`) and that pane's marker timestamp
@@ -1352,8 +1361,6 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       // The target named its pane exactly, so the answer does too.
       return { ...picked, ...agentFieldsOf(entry), pane: wanted, sessionName: entry.session };
     }
-    const snap = await boxActions.paneSnapshot(box, box.sessionName, { lines });
-    if (!snap.ok) return reply.code(502).send({ error: snap.error });
     // Viewer geometry: the app asks for a phone-shaped window by keeping an
     // invisible tmux client attached at cols×rows (sessions.ensureSizedViewer)
     // — the same mechanism that lets a narrowed browser reflow the session.
@@ -1363,14 +1370,37 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     // /term while a setup job runs, so no client can hatch the session early.
     const cols = Number(req.query?.cols), rows = Number(req.query?.rows);
     const viewerId = req.deviceId || req.query?.client;
-    if (Number.isInteger(cols) && cols >= 20 && cols <= 400
+    const sized = Number.isInteger(cols) && cols >= 20 && cols <= 400
       && Number.isInteger(rows) && rows >= 5 && rows <= 300
-      && viewerId && setupManager?.currentForBox(box.id)?.status !== 'running') {
-      try { sessions.ensureSizedViewer({ box, session: box.sessionName, clientId: viewerId, cols, rows }); } catch {}
+      && !!viewerId && setupManager?.currentForBox(box.id)?.status !== 'running';
+    // A sized capture also reads its window's zoom state (one more line from the
+    // same ssh run), and the mark is taken before it starts: phoneZoom.js orders
+    // what a capture saw against the zoom it may itself have asked for.
+    const zoomMark = sized ? phoneZoom.mark() : 0;
+    const snap = await boxActions.paneSnapshot(box, box.sessionName, sized ? { lines, windowState: true } : { lines });
+    if (!snap.ok) return reply.code(502).send({ error: snap.error });
+    const { windowState, ...shown } = snap;
+    if (sized) {
+      let viewer = null;
+      try { viewer = sessions.ensureSizedViewer({ box, session: box.sessionName, clientId: viewerId, cols, rows }); } catch {}
+      // A split pane gets only its share of a phone-sized window, so while this
+      // viewer looks the pane in front is zoomed, and the zoom is undone when the
+      // viewer's client exits (its TTL, a session switch, the box closing). Only
+      // behind a viewer that really exists, so there is always an exit to hang
+      // the restore on. Fired, never awaited: the capture must not wait on it.
+      if (viewer && typeof viewer === 'object') {
+        const zoomKey = `${box.id}\n${viewerId}`;
+        if (!zoomWatched.has(viewer)) {
+          zoomWatched.add(viewer);
+          try { sessions.onExit(viewer, () => { void phoneZoom.gone(zoomKey); }); } catch {}
+        }
+        void phoneZoom.note(zoomKey, box, box.sessionName,
+          windowState && shown.pane ? { ...windowState, pane: shown.pane } : null, zoomMark);
+      }
     }
     // The session's active pane moves, so the state is that of the pane the
     // capture says it read; a tmux too old to say reads as no state.
-    return { ...snap, ...agentFieldsOf(agentEntryOf(latest, snap.pane)), sessionName: box.sessionName };
+    return { ...shown, ...agentFieldsOf(agentEntryOf(latest, shown.pane)), sessionName: box.sessionName };
   });
 
   app.post('/api/boxes/:id/keys', { preHandler: requireAuth }, async (req, reply) => {

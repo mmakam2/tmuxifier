@@ -23,6 +23,7 @@ import {
 } from './tmuxInject.js';
 import { buildVoiceWriterRemote } from './voiceWriter.js';
 import { createSingleFlight } from './singleFlight.js';
+import { parseWindowState, isWindowStateLine } from './phoneZoom.js';
 
 // Curated provision-time tools. Ids are the ONLY strings that ever reach the
 // generated shell script — resolveTools throws on anything not in the catalog,
@@ -664,6 +665,55 @@ export function buildSelectPaneRemote(session, windowId, paneId) {
   ].join('\n');
 }
 
+// Zoom one pane to fill its window: what a phone needs from a split pane
+// (phoneZoom.js says when). `resize-pane -Z` is a TOGGLE, so the script only runs it
+// when all three hold for the exact pane named: its window is the session's current
+// one, the pane is that window's active pane, and the window is not zoomed. Anything
+// else (the operator moved on, someone zoomed it meanwhile) is left exactly as it is.
+//
+// The target is resolved first with the same strict, read-only `capture-pane` as
+// buildSelectPaneRemote, for the reason given there: `display-message` resolves a
+// missing pane to some other one and exits 0. Under `set -eu` a pane that is not in
+// that window of that session ends the script there, with tmux's own error.
+//
+// `__ZOOMED__` is printed only when this run zoomed the window and the flag reads 1
+// afterwards (a single-pane window cannot be zoomed and prints nothing). That line
+// is the caller's only licence to undo the zoom later.
+export function buildZoomPaneRemote(session, windowId, paneId) {
+  if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) throw new Error('invalid session name');
+  if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) throw new Error('invalid window id');
+  if (typeof paneId !== 'string' || !PANE_ID_RE.test(paneId)) throw new Error('invalid pane id');
+  const t = shSingleQuote(`=${session}:${windowId}.${paneId}`);
+  return [
+    ...tmuxBinPreamble(),
+    `"$TMUX_BIN" capture-pane -p -t ${t} >/dev/null`,
+    `if [ "$("$TMUX_BIN" display-message -p -t ${t} '#{window_active}#{pane_active}#{window_zoomed_flag}')" = 110 ]; then`,
+    `  "$TMUX_BIN" resize-pane -Z -t ${t}`,
+    `  if [ "$("$TMUX_BIN" display-message -p -t ${t} '#{window_zoomed_flag}')" = 1 ]; then echo __ZOOMED__; fi`,
+    'fi',
+  ].join('\n');
+}
+
+// Undo a zoom this server made. Window-targeted, because the pane in front may have
+// changed since (a jump keeps the window zoomed on another pane): `resize-pane -Z`
+// on a zoomed window's active pane unzooms it, and it runs only while the flag
+// reads 1, so a second run or a window someone already unzoomed is left alone.
+// `list-panes` is the strict resolve here: a window that is not in that session
+// ends the script with tmux's "can't find window". Focus is never changed.
+export function buildUnzoomWindowRemote(session, windowId) {
+  if (typeof session !== 'string' || !SESSION_NAME_RE.test(session)) throw new Error('invalid session name');
+  if (typeof windowId !== 'string' || !WINDOW_ID_RE.test(windowId)) throw new Error('invalid window id');
+  const t = shSingleQuote(`=${session}:${windowId}`);
+  return [
+    ...tmuxBinPreamble(),
+    `"$TMUX_BIN" list-panes -t ${t} >/dev/null`,
+    `if [ "$("$TMUX_BIN" display-message -p -t ${t} '#{window_zoomed_flag}')" = 1 ]; then`,
+    `  "$TMUX_BIN" resize-pane -Z -t ${t}`,
+    '  echo __UNZOOMED__',
+    'fi',
+  ].join('\n');
+}
+
 // Kill one tmux session on the box. Deliberately NOT a widening of
 // buildKillTmuxRemote below: that one runs sanitizeSession (silently REWRITES a
 // name rather than rejecting it) and ends in `|| true` (reports success
@@ -835,19 +885,49 @@ export function createBoxActions({ run, runStdin, pipe = null, hostKeyPolicy = '
     // previews would pile up. Every other caller runs its own capture. A device
     // read (the app, MCP read_pane) that joined one already in flight could
     // return a screen from before the keys that caller had just sent.
-    paneSnapshot(box, session, { lines = 200, timeoutMs = 8000, shared = false, windowId, paneId } = {}) {
+    //
+    // `windowState` is the phone's sized capture asking what phoneZoom.js needs: the
+    // script then prints one marker line first, which is taken off here before the
+    // snapshot parser sees the rest, and answered as `windowState` (absent when the
+    // line does not parse: a tmux too old for it simply gets no zoom).
+    paneSnapshot(box, session, { lines = 200, timeoutMs = 8000, shared = false, windowId, paneId, windowState = false } = {}) {
       const capture = async () => {
-        const res = await runRemote(box, buildPaneSnapshotRemote(session, { lines, windowId, paneId }), timeoutMs);
+        const res = await runRemote(box, buildPaneSnapshotRemote(session, { lines, windowId, paneId, windowState }), timeoutMs);
         if (!res || res.code !== 0) {
           const msg = String((res && (res.stderr || res.stdout)) || '').trim().slice(0, 300);
           return { ok: false, error: msg || 'capture failed' };
         }
-        const snap = parsePaneSnapshot(res.stdout);
+        let raw = String(res.stdout ?? '');
+        let ws = null;
+        if (windowState === true) {
+          const nl = raw.indexOf('\n');
+          const first = nl === -1 ? raw : raw.slice(0, nl);
+          if (isWindowStateLine(first)) {
+            ws = parseWindowState(first);
+            raw = nl === -1 ? '' : raw.slice(nl + 1);
+          }
+        }
+        const snap = parsePaneSnapshot(raw);
         if (!snap) return { ok: false, error: 'unparseable snapshot' };
-        return { ok: true, ...snap };
+        return { ok: true, ...snap, ...(ws ? { windowState: ws } : {}) };
       };
       // The pane is part of the key: two panes of one session are two screens.
       return shared ? paneFlight(`${box.id}\n${session}\n${paneId ?? ''}\n${lines}`, capture) : capture();
+    },
+    // The phone's zoom and its restore (phoneZoom.js decides when). Each answers
+    // `{ ok }`, true only when the script's own marker line says tmux did it; a
+    // builder that refuses its arguments is a plain `{ ok: false }`, never a throw.
+    async zoomPane(box, session, windowId, paneId, { timeoutMs = 8000 } = {}) {
+      let remote;
+      try { remote = buildZoomPaneRemote(session, windowId, paneId); } catch { return { ok: false }; }
+      const res = await runRemote(box, remote, timeoutMs);
+      return { ok: !!res && res.code === 0 && /^__ZOOMED__$/m.test(String(res.stdout ?? '')) };
+    },
+    async unzoomWindow(box, session, windowId, { timeoutMs = 8000 } = {}) {
+      let remote;
+      try { remote = buildUnzoomWindowRemote(session, windowId); } catch { return { ok: false }; }
+      const res = await runRemote(box, remote, timeoutMs);
+      return { ok: !!res && res.code === 0 && /^__UNZOOMED__$/m.test(String(res.stdout ?? '')) };
     },
     // Text goes literal (-l) via the same builder dictation uses; a named key
     // must already be validated against NAMED_KEYS by the route — the builder

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { sanitizeSession, shSingleQuote, SESSION_NAME_RE, WINDOW_ID_RE, PANE_ID_RE } from './sshCommand.js';
+import { WINDOW_STATE_FORMAT } from './phoneZoom.js';
 
 // Pane-aware injection of an uploaded file's path into a tmux session
 // (spec: docs/superpowers/specs/2026-07-13-claude-aware-tmux-injection-design.md).
@@ -151,7 +152,7 @@ export function buildSendKeysRemote(session, text) {
 // The geometry line resolves its target leniently where capture-pane does not
 // (it exits 0 for a pane that is not there); the `&&` is what turns a vanished
 // pane into a failed script instead of another pane's geometry.
-export function buildPaneSnapshotRemote(session, { lines = 200, windowId, paneId } = {}) {
+export function buildPaneSnapshotRemote(session, { lines = 200, windowId, paneId, windowState = false } = {}) {
   let q;
   if (windowId === undefined && paneId === undefined) {
     q = sess(session);
@@ -163,6 +164,10 @@ export function buildPaneSnapshotRemote(session, { lines = 200, windowId, paneId
   }
   const n = Math.max(0, Math.min(2000, Math.trunc(Number(lines) || 0)));
   return [
+    // `windowState` (the phone's sized capture only) puts one extra line FIRST:
+    // the pane's window, whether it is zoomed and how many panes it holds, which
+    // is what phoneZoom.js decides from. A constant format, nothing interpolated.
+    ...(windowState === true ? [`tmux display-message -p -t ${q} '${WINDOW_STATE_FORMAT}'`] : []),
     `tmux display-message -p -t ${q} '#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{pane_id}'`,
     `tmux capture-pane -e -p -t ${q} -S -${n}`,
   ].join(' && ');
