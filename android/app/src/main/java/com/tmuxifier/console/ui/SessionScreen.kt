@@ -72,6 +72,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.tmuxifier.console.AppState
+import com.tmuxifier.console.agent.AckState
+import com.tmuxifier.console.agent.ackCandidate
+import com.tmuxifier.console.agent.ackFinished
+import com.tmuxifier.console.agent.ackNext
+import com.tmuxifier.console.agent.ackStarted
+import com.tmuxifier.console.agent.agentStateOf
 import com.tmuxifier.console.api.ApiException
 import com.tmuxifier.console.api.PaneSnapshot
 import com.tmuxifier.console.keys.SendSpec
@@ -125,6 +131,10 @@ fun SessionScreen(
     // makes /pane answer 502, leaves `snap` null, and would take the chip away
     // at exactly the moment its recreate row is the thing wanted.
     var lastSession by remember(boxId) { mutableStateOf("") }
+    // Which finished turns this screen has already claimed as seen, and the one
+    // post in flight. The decision is agent/AgentAck.kt; the poll below only
+    // feeds it captures.
+    var ack by remember(boxId) { mutableStateOf(AckState()) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
@@ -143,6 +153,26 @@ fun SessionScreen(
                     s.sessionName?.takeIf { it.isNotEmpty() }?.let { lastSession = it }
                     lines = parseSgr(s.content)
                     reconnecting = false
+                    // Looking at a finished turn acknowledges it. "In front" is
+                    // RESUMED (this loop also runs while merely STARTED: a
+                    // dialog over the app, split screen) and the session sheet
+                    // closed: a capture drawn behind the sheet is not being
+                    // looked at. A failed post shows nothing; the chip stays
+                    // `done` and the next capture asks again (or not, for a 4xx).
+                    val front = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !sheetOpen
+                    ackNext(ack, ackCandidate(boxId, s), front)?.let { key ->
+                        ack = ackStarted(ack, key)
+                        scope.launch { // not the poll's own coroutine: a slow post must not delay the next capture
+                            val status = try {
+                                client.agentSeen(key.boxId, key.pane, key.ts)
+                                200
+                            } catch (e: ApiException) {
+                                e.status
+                            }
+                            ack = ackFinished(ack, key, status)
+                            if (status == 401) onUnauthorized()
+                        }
+                    }
                     if (stick && lines.isNotEmpty()) {
                         runCatching { listState.scrollToItem(lines.size - 1) }
                     }
@@ -196,17 +226,9 @@ fun SessionScreen(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            snap?.agent?.let { agent ->
-                val fg = if (agent == "waiting") Color(0xFFFFB300) else Color(0xFF4CAF50)
-                Text(
-                    agent,
-                    color = fg,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier
-                        .background(fg.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                )
-            }
+            // The state of the pane this capture is of; a word outside the four
+            // states (an older server's) draws no chip.
+            agentStateOf(snap?.agent)?.let { AgentChip(it, snap?.agentCause) }
             TextButton(onClick = { state.store.baseUrl?.let { uriHandler.openUri(it) } }) { Text("browser") }
         }
         if (reconnecting) {

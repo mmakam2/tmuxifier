@@ -30,6 +30,13 @@ internal fun killBody(session: String, windowId: String?): String = buildJsonObj
     if (windowId != null) put("windowId", windowId)
 }.toString()
 
+// `ts` goes out as a JSON number: the route checks Number.isSafeInteger(ts), so a
+// quoted one is a 400.
+internal fun agentSeenBody(pane: String, ts: Long): String = buildJsonObject {
+    put("pane", pane)
+    put("ts", ts)
+}.toString()
+
 // A body this build cannot read is a failed request, not a crash: a decode
 // failure used to escape every `catch (e: ApiException)`. Status 0 is what the
 // screens already treat as "retry", so it shows as offline instead.
@@ -151,6 +158,13 @@ class ApiClient(
     suspend fun setSession(boxId: String, name: String): BoxInfo =
         parse(BoxInfo.serializer(), request("PATCH", "/api/boxes/$boxId",
             buildJsonObject { put("sessionName", name) }.toString()))
+
+    // Claim that the finished turn of ONE pane (marker `ts`, exactly what the
+    // capture carried) has been seen: the server turns its `done` into `idle`
+    // for every client. 400 when there is nothing to acknowledge any more.
+    suspend fun agentSeen(boxId: String, pane: String, ts: Long) {
+        request("POST", "/api/boxes/$boxId/agent-seen", agentSeenBody(pane, ts))
+    }
 
     suspend fun fcmConfig(): FcmConfig =
         parse(FcmConfig.serializer(), request("GET", "/api/devices/fcm-config"))

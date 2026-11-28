@@ -19,6 +19,11 @@ class ApiClientBodyTest {
         assertEquals("""{"session":"web","windowId":"@3"}""", killBody("web", "@3"))
     }
 
+    @Test fun agentSeenNamesThePaneAndSendsTsAsANumber() {
+        // The route checks Number.isSafeInteger(ts): a quoted ts is a 400.
+        assertEquals("""{"pane":"%12","ts":1723180000}""", agentSeenBody("%12", 1723180000L))
+    }
+
     @Test fun aResponseThatDoesNotDecodeIsAnApiException() {
         val e = assertFailsWith<ApiException> { decodeResponse(seriesMapSerializer, """{"b1":[{"t":"soon","up":true}]}""") }
         assertEquals(0, e.status)
