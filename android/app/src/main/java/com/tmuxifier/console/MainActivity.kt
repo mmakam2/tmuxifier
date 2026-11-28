@@ -31,13 +31,18 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.tmuxifier.console.agent.JumpTarget
 import com.tmuxifier.console.agent.planJump
 import com.tmuxifier.console.agent.runJump
+import com.tmuxifier.console.agent.targetListed
 import com.tmuxifier.console.api.ApiException
+import com.tmuxifier.console.push.PushTarget
 import com.tmuxifier.console.push.initFirebase
+import com.tmuxifier.console.push.pushTargetOf
 import com.tmuxifier.console.ui.FleetScreen
 import com.tmuxifier.console.ui.SessionScreen
 import com.tmuxifier.console.ui.SettingsScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 // Screen survives process death as a string — no navigation library for a
@@ -64,8 +69,10 @@ val ScreenSaver = Saver<Screen, String>(
 
 class MainActivity : ComponentActivity() {
     // A push tap lands here: the notification intent (foreground path) and the
-    // system-posted notification (background path) both carry a boxId extra.
-    private val pendingBox = mutableStateOf<String?>(null)
+    // system-posted notification (background path) both carry the FCM data keys
+    // as extras. The activity is exported, so any app can send them: they are
+    // read only through the pure pushTargetOf, which checks every value.
+    private val pendingPush = mutableStateOf<PushTarget?>(null)
     private val askNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* optional — push just stays silent if denied */ }
 
@@ -79,7 +86,12 @@ class MainActivity : ComponentActivity() {
         // dispatched insets is the only approach that covers it.
         enableEdgeToEdge()
         val state = AppState(applicationContext)
-        pendingBox.value = intent?.getStringExtra("boxId")
+        // Only a fresh launch reads its intent. The activity keeps its launch
+        // intent across a recreation (fold, rotation: savedInstanceState is set)
+        // and a reopen from recents (LAUNCHED_FROM_HISTORY); without this guard
+        // each of those would run the push's jump again.
+        val fresh = savedInstanceState == null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+        if (fresh) pendingPush.value = pushTargetFrom(intent)
         if (state.enrolled) {
             maybeAskNotifications()
             syncFcmToken(state)
@@ -98,7 +110,7 @@ class MainActivity : ComponentActivity() {
                         // gating permission+token-sync on cold-start left the
                         // new server row with no FCM token (observed live —
                         // zero push targets after an uninstall/re-pair).
-                        Shell(state, pendingBox, onEnrolledSideEffects = {
+                        Shell(state, pendingPush, onEnrolledSideEffects = {
                             maybeAskNotifications()
                             syncFcmToken(state)
                         })
@@ -110,7 +122,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        pendingBox.value = intent.getStringExtra("boxId")
+        pendingPush.value = pushTargetFrom(intent)
+    }
+
+    // An extras bundle another app built may not even unparcel (a class this app
+    // does not have): that is no push, never a crash.
+    private fun pushTargetFrom(intent: Intent?): PushTarget? {
+        val extras = intent ?: return null
+        return runCatching {
+            pushTargetOf(listOf("boxId", "session", "windowId", "pane").associateWith { extras.getStringExtra(it) })
+        }.getOrNull()
     }
 
     private fun maybeAskNotifications() {
@@ -154,7 +175,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun Shell(
     state: AppState,
-    pendingBox: MutableState<String?>,
+    pendingPush: MutableState<PushTarget?>,
     onEnrolledSideEffects: () -> Unit,
 ) {
     var screen by rememberSaveable(stateSaver = ScreenSaver) {
@@ -194,14 +215,75 @@ private fun Shell(
         }
     }
 
-    // Notification tap-through: an agent-input push opens that box's session.
-    LaunchedEffect(pendingBox.value) {
-        val boxId = pendingBox.value ?: return@LaunchedEffect
-        if (state.enrolled) {
-            notice = null // a notice left from an earlier jump is not about this open
+    // A tapped push that names an agent pane: the same jump, from fresh data. The
+    // push may be old, so the box and its status are fetched first, and the box is
+    // never repointed at a session (or a window) the server no longer lists: then
+    // it opens on whatever it points at now, with no notice. When the box cannot
+    // be read, or is gone from the list, it opens as an older server's push does.
+    fun openFromPush(boxId: String, target: JumpTarget) {
+        val client = state.client()
+        if (client == null) {
+            notice = null
             screen = Screen.Session(boxId, boxId)
+            return
         }
-        pendingBox.value = null
+        jumping = true
+        scope.launch {
+            try {
+                val fetched = try {
+                    coroutineScope {
+                        val boxes = async { client.boxes() }
+                        val status = async { client.status() }
+                        boxes.await() to status.await()
+                    }
+                } catch (e: ApiException) {
+                    if (e.status == 401) {
+                        screen = Screen.Settings
+                        return@launch
+                    }
+                    null
+                }
+                val box = fetched?.first?.firstOrNull { it.id == boxId }
+                if (fetched == null || box == null) {
+                    notice = null
+                    screen = Screen.Session(boxId, boxId)
+                    return@launch
+                }
+                val label = box.label.ifEmpty { box.id }
+                if (!targetListed(fetched.second[boxId], target)) {
+                    notice = null
+                    screen = Screen.Session(boxId, label)
+                    return@launch
+                }
+                val failed = runJump(
+                    planJump(box.sessionName, target),
+                    setSession = { client.setSession(boxId, it) },
+                    selectPane = { s, w, p -> client.selectWindow(boxId, s, w, p) },
+                )
+                notice = failed?.let { "agent not selected: $it" }
+                screen = Screen.Session(boxId, label)
+            } catch (e: ApiException) {               // runJump rethrows only a 401
+                screen = Screen.Settings
+            } finally {
+                jumping = false
+            }
+        }
+    }
+
+    // Notification tap-through. A push with no agent pane (an older server's, or
+    // an older event's) opens that box's session, as does one that arrives while a
+    // jump is already running; one with a pane jumps to it.
+    LaunchedEffect(pendingPush.value) {
+        val push = pendingPush.value ?: return@LaunchedEffect
+        pendingPush.value = null // re-keys and cancels this effect: nothing below may suspend
+        if (!state.enrolled) return@LaunchedEffect
+        val target = push.jump
+        if (target == null || jumping) {
+            notice = null // a notice left from an earlier jump is not about this open
+            screen = Screen.Session(push.boxId, push.boxId)
+        } else {
+            openFromPush(push.boxId, target) // launches on `scope`, which outlives this effect
+        }
     }
     BackHandler(enabled = state.enrolled && screen != Screen.Fleet) { screen = Screen.Fleet }
     when (screen) {

@@ -2,7 +2,9 @@ package com.tmuxifier.console.push
 
 // Notification plumbing. pushAvailable() is the runtime half of the
 // conditional-Firebase build: without google-services.json there is no
-// FirebaseApp, and every push-related step quietly no-ops.
+// FirebaseApp, and every push-related step quietly no-ops. The app posts a
+// notification itself only in the foreground (PushService); it is one per box
+// and agent pane, and its tap carries the push's data keys as extras.
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -55,21 +57,32 @@ fun initFirebase(context: Context, cfgJson: String?): Boolean {
     }
 }
 
-fun showAgentNotification(context: Context, boxId: String, title: String, body: String) {
+fun showAgentNotification(context: Context, target: PushTarget, title: String, body: String) {
     val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     nm.createNotificationChannel(
         NotificationChannel(CHANNEL_AGENT, "Agent events", NotificationManager.IMPORTANCE_HIGH),
     )
+    // The tap carries the same keys as the FCM data, so MainActivity reads one set
+    // of extras whether this notification or the system's was tapped.
     val intent = Intent(context, MainActivity::class.java).apply {
-        putExtra("boxId", boxId)
+        putExtra("boxId", target.boxId)
+        target.jump?.let {
+            putExtra("session", it.session)
+            putExtra("windowId", it.windowId)
+            putExtra("pane", it.pane)
+        }
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
     }
+    // One id per box and agent pane (the box's own for a push with no pane): a
+    // newer event of the same agent replaces its notification, two agents on one
+    // box keep one each. The id is the PendingIntent's request code too: two
+    // PendingIntents that differ only in extras are one, and FLAG_UPDATE_CURRENT
+    // would point both notifications at the newer agent.
+    val id = notificationIdOf(target.boxId, target.jump?.pane)
     val pi = PendingIntent.getActivity(
-        context, boxId.hashCode(), intent,
+        context, id, intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
-    // Notification id = boxId hash: a newer event for the same box replaces
-    // the older one instead of stacking.
     val n = NotificationCompat.Builder(context, CHANNEL_AGENT)
         .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
         .setContentTitle(title)
@@ -78,5 +91,5 @@ fun showAgentNotification(context: Context, boxId: String, title: String, body: 
         .setContentIntent(pi)
         .build()
     // Without POST_NOTIFICATIONS (API 33+) this is a no-op; never a crash.
-    runCatching { NotificationManagerCompat.from(context).notify(boxId.hashCode(), n) }
+    runCatching { NotificationManagerCompat.from(context).notify(id, n) }
 }
