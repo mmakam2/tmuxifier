@@ -482,8 +482,10 @@ export function createReducer({ now = () => Math.floor(Date.now() / 1000), state
 // pane no longer runs opencode; a pane running anything else (Claude, a shell)
 // is never touched here. The fold is attribution, not a unit: the one shared
 // server gives no per-TUI handle, so two panes in one directory (in one tmux
-// session or two) show the same folded state, the documented limit (spec §4.1,
-// pane-level design §6.3).
+// session or two) show the same state, apart from each pane's own `paneSince`
+// floor (a pane launched after a turn finished reads ready/start beside its
+// sibling's ready/stop), the documented limit (spec §4.1, pane-level design
+// §6.3).
 //
 // Two floors, kept apart on purpose:
 // - `paneSince` (pane id -> when that pane started running opencode) follows
@@ -2136,8 +2138,9 @@ export const GLOBAL_KEY = Symbol.for('tmuxifier.opencode-agent');
 // session name plus the pane id, -> the content this core last wrote),
 // `paneSince` (pane id -> epoch seconds it started running opencode, the
 // fold's floor), `since` (tmux session -> epoch seconds it started hosting
-// opencode, mail's floor) and `state` (the reducer's, see STATE_VERSION)
-// are plain properties so a hand-over can pass them on to the next core;
+// opencode, mail's floor), `seedPaneSince` (see takeOver) and `state` (the
+// reducer's, see STATE_VERSION) are plain properties so a hand-over can pass
+// them on to the next core;
 // `state` (a previous core's) seeds this core's reducer.
 //
 // The mail part (createMailPart) exists only when `synthetic` (OpenCode's
@@ -2209,6 +2212,10 @@ export function createCore({
     written: new Map(),
     since: new Map(),
     paneSince: new Map(),
+    // Set by takeOver from a core that kept no `paneSince` (the previous
+    // asset version): the next sweep that parses a listing seeds each pane's
+    // floor from its tmux session's inherited `since`, then clears it.
+    seedPaneSince: false,
     mailState: mail?.state ?? null,
     mailTargetsNow,
     paneOfSession,
@@ -2365,15 +2372,29 @@ export function createCore({
       for (const s of hosting) if (!core.since.has(s)) core.since.set(s, sinceFloor);
       for (const s of [...core.since.keys()]) if (!hosting.has(s)) core.since.delete(s);
 
+      // Right after a hand-over from an older core (seedPaneSince), a pane
+      // this core has no floor for takes its tmux session's inherited `since`
+      // instead: a turn that began, or a block raised, before the reload stays
+      // a candidate. This runs after this sweep's own `since` update, so a
+      // session that only just started hosting reads `sinceFloor` either way.
+      const fromSession = core.seedPaneSince === true;
+      core.seedPaneSince = false;
       const hostingPanes = new Set();
-      for (const p of panes) if (isOpencodeCmd(p.cmd)) hostingPanes.add(p.pane);
-      for (const id of hostingPanes) if (!core.paneSince.has(id)) core.paneSince.set(id, sinceFloor);
+      for (const p of panes) {
+        if (!isOpencodeCmd(p.cmd)) continue;
+        hostingPanes.add(p.pane);
+        if (core.paneSince.has(p.pane)) continue;
+        const inherited = fromSession ? core.since.get(p.session) : undefined;
+        core.paneSince.set(p.pane, Number.isFinite(inherited) ? inherited : sinceFloor);
+      }
       for (const id of [...core.paneSince.keys()]) if (!hostingPanes.has(id)) core.paneSince.delete(id);
 
       const live = new Set();
       for (const [pane, fold] of foldForPanes(reducer, panes, core.paneSince, t)) {
         const safe = safeName(fold.session);
-        // `.`/`..` cannot be tmux session names, but the listing is untrusted.
+        // With the pane suffix the name can never be `.` or `..`; this only
+        // keeps a session the untrusted listing names `.` or `..` without a
+        // marker (tmux itself forbids '.' in a session name).
         if (!safe || safe === '.' || safe === '..') continue;
         const name = safe + pane;
         const content = markerLine(fold.session, fold, pane);
@@ -2489,11 +2510,23 @@ export function createCore({
 
 // The hand-over every setup performs: abort whichever core `prev` is (a
 // foreign or older object is never trusted to have abort()), then build the
-// next core inheriting what `prev` wrote, when each pane started running
-// opencode and each tmux session started hosting it, and everything its
-// reducer knows (a pending block or a mid-turn session in another directory
-// must survive OpenCode setting the plugin up for a new one; an incompatible STATE_VERSION starts fresh), and the mail
-// part's in-flight items (prev.mailState; its abort ended every held wait).
+// next core inheriting:
+// - `written` as is. A core of the previous asset version wrote session-wide
+//   files (`web`); safeName never yields `%`, so no such name equals a pane
+//   marker's (`web%3`), each is simply not live on the first sweep, and
+//   release deletes the file only while it still holds what that core wrote;
+// - `paneSince` when `prev` has one. An older core (a `since` Map and no
+//   `paneSince` Map) kept none, so the next core is marked `seedPaneSince` and
+//   its first sweep that parses a listing gives each pane its tmux session's
+//   inherited `since` (otherwise a turn begun, or a block raised, before the
+//   reload would fall below the first sweep's floor). The mark is passed on by
+//   a hand-over that comes before that sweep (OpenCode re-runs setup for every
+//   new project directory);
+// - `since` as is: keyed by tmux session in both versions, and mail's floor;
+// - everything its reducer knows (a pending block or a mid-turn session in
+//   another directory must survive OpenCode setting the plugin up for a new
+//   one; an incompatible STATE_VERSION starts fresh), and the mail part's
+//   in-flight items (prev.mailState; its abort ended every held wait).
 // It also disposes `prev`'s registry (every hook it registered on OpenCode),
 // once `opts.registry`'s own registrations have settled (R34: an overlap, not
 // a gap; at once without one), and inherits its list of live ctxs and their
@@ -2507,6 +2540,7 @@ export function takeOver(prev, opts = {}) {
   let written = null;
   let since = null;
   let paneSince = null;
+  let seed = false;
   let state = null;
   let mailState = null;
   let live = opts.live instanceof Map ? opts.live : null;
@@ -2517,6 +2551,7 @@ export function takeOver(prev, opts = {}) {
       if (prev.written instanceof Map) written = prev.written;
       if (prev.since instanceof Map) since = prev.since;
       if (prev.paneSince instanceof Map) paneSince = prev.paneSince;
+      seed = (prev.since instanceof Map && !(prev.paneSince instanceof Map)) || prev.seedPaneSince === true;
       state = prev.state ?? null;
       mailState = prev.mailState ?? null;
       if (!live && prev.live instanceof Map) live = prev.live;
@@ -2527,6 +2562,7 @@ export function takeOver(prev, opts = {}) {
   if (written) core.written = written;
   if (since) core.since = since;
   if (paneSince) core.paneSince = paneSince;
+  if (seed) core.seedPaneSince = true;
   if (known) {
     try { prev.abort(); } catch { /* a foreign or older object */ }
     disposeAfter(prev, opts.registry);

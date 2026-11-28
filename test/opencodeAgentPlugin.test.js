@@ -1,5 +1,5 @@
 import { test, expect, vi, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -446,6 +446,28 @@ test('two opencode panes of one tmux session get one marker each; the one that g
   expect(core.since.get('web')).toBe(1000); // the session still hosts opencode: mail's floor does not move
 });
 
+test('a second opencode pane joining a session that already hosts it gets its own later floor; the session keeps its older one', async () => {
+  const { core, home, state } = await rig();
+  await core.handle(ev('session.created', 900, { sessionID: 'ses_a' }, '/proj'));
+  state.t = 1000;
+  state.panes = row('web', 'opencode', '/proj', '1', '1', '%1');
+  await core.sweep();
+  await core.handle(ev('session.execution.started', 1020, { sessionID: 'ses_a' }));
+  await core.handle(ev('session.execution.succeeded', 1050, { sessionID: 'ses_a' }));
+  state.t = 1100;
+  await core.sweep(); // the last listing without the second pane
+  state.t = 1200;
+  state.panes += row('web', 'opencode', '/proj', '0', '1', '%2');
+  await core.sweep();
+  expect(core.since.get('web')).toBe(1000);
+  expect(core.paneSince.get('%1')).toBe(1000);
+  expect(core.paneSince.get('%2')).toBe(1100); // its own first sighting
+  // Same directory, different floors: the turn that finished at 1050 shows in
+  // the pane that was there for it, not in the one launched after it.
+  expect(read(home, 'web%1')).toBe('web:ready:1050:stop:%1\n');
+  expect(read(home, 'web%2')).toBe('web:ready:1100:start:%2\n');
+});
+
 test('a pane moved to another tmux session keeps its since; the marker follows and the old file is released', async () => {
   const { core, home, state } = await rig();
   await core.handle(ev('session.created', 900, { sessionID: 'ses_a' }, '/proj'));
@@ -819,6 +841,83 @@ test('a previous core with a different STATE_VERSION hands over nothing of its r
   expect(globalThis[KEY].reducer.derive('ses_x')).toEqual({ state: 'blocked', cause: 'permission', ts: 5 });
   await c3();
   expect(err).not.toHaveBeenCalled();
+});
+
+// What a core of the previous asset version leaves on the global: `written`
+// and `since` keyed by tmux session, no `paneSince`, and a session blocked
+// since 1200 in /proj.
+async function olderCore(home, { file = 'web:blocked:1200:permission\n' } = {}) {
+  const { createReducer } = await import(ASSET);
+  const r = createReducer({ now: () => 1 });
+  r.apply(ev('session.created', 900, { sessionID: 'ses_a' }, '/proj'));
+  r.apply(ev('session.execution.started', 1100, { sessionID: 'ses_a' }));
+  r.apply(ev('permission.asked', 1200, { id: 'per_1', sessionID: 'ses_a' }, '/proj'));
+  mkdirSync(markerDir(home), { recursive: true });
+  writeFileSync(marker(home, 'web'), file);
+  return { abort() {}, state: r.state, written: new Map([['web', 'web:blocked:1200:permission\n']]), since: new Map([['web', 1000]]) };
+}
+const takeOverOpts = (home, state) => ({
+  home, listPanes: async () => state.panes, now: () => state.t, paneCacheMs: 0,
+  setInterval: () => ({ unref() {} }), clearInterval: () => {},
+});
+
+test('hand-over from an older core: its session-wide marker is released, the pane marker is written, and a block raised before the reload still shows', async () => {
+  const { takeOver } = await import(ASSET);
+  const home = tmp();
+  const state = { t: 5000, panes: row('web', 'opencode', '/proj', '1', '1', '%3') };
+  const core = takeOver(await olderCore(home), takeOverOpts(home, state));
+  expect(core.seedPaneSince).toBe(true);
+  await core.sweep();
+  expect(existsSync(marker(home, 'web'))).toBe(false);
+  expect(read(home, 'web%3')).toBe('web:blocked:1200:permission:%3\n');
+  expect([...core.written.keys()]).toEqual(['web%3']);
+  expect(core.paneSince.get('%3')).toBe(1000); // its session's floor, not 4998
+  expect(core.since.get('web')).toBe(1000);
+  expect(core.seedPaneSince).toBe(false);
+
+  // After the seed, a pane that starts hosting gets the previous listing's time, not its session's floor.
+  state.t = 6000;
+  state.panes += row('web', 'opencode', '/other', '0', '1', '%4');
+  await core.sweep();
+  expect(core.paneSince.get('%4')).toBe(5000);
+  core.abort();
+});
+
+test('hand-over from an older core: a session-wide file the hook rewrote is kept', async () => {
+  const { takeOver } = await import(ASSET);
+  const home = tmp();
+  const state = { t: 5000, panes: row('web', 'opencode', '/proj', '1', '1', '%3') };
+  const core = takeOver(await olderCore(home, { file: 'web:working:9:prompt\n' }), takeOverOpts(home, state));
+  await core.sweep();
+  expect(read(home, 'web')).toBe('web:working:9:prompt\n');
+  expect(core.written.has('web')).toBe(false);
+  expect(read(home, 'web%3')).toBe('web:blocked:1200:permission:%3\n');
+  core.abort();
+});
+
+test('a second hand-over before the first sweep still seeds the pane floors from the older core', async () => {
+  const { takeOver } = await import(ASSET);
+  const home = tmp();
+  const state = { t: 5000, panes: row('web', 'opencode', '/proj', '1', '1', '%3') };
+  const first = takeOver(await olderCore(home), takeOverOpts(home, state));
+  const second = takeOver(first, takeOverOpts(home, state)); // OpenCode set the plugin up for another directory
+  expect(second.seedPaneSince).toBe(true);
+  await second.sweep();
+  expect(read(home, 'web%3')).toBe('web:blocked:1200:permission:%3\n');
+  expect(second.paneSince.get('%3')).toBe(1000);
+  second.abort();
+});
+
+test('a hand-over between two cores of this version seeds nothing', async () => {
+  const { takeOver } = await import(ASSET);
+  const home = tmp();
+  const state = { t: 5000, panes: '' };
+  const first = takeOver(null, takeOverOpts(home, state));
+  await first.sweep();
+  const second = takeOver(first, takeOverOpts(home, state));
+  expect(second.seedPaneSince).toBe(false);
+  expect(second.paneSince).toBe(first.paneSince);
+  second.abort();
 });
 
 test('an event stream that ends without an abort stops the sweep timer, deletes its markers, and keeps the core for a later hand-over', async () => {
