@@ -73,6 +73,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.tmuxifier.console.AppState
 import com.tmuxifier.console.agent.AckState
+import com.tmuxifier.console.agent.JumpNotice
 import com.tmuxifier.console.agent.ackCandidate
 import com.tmuxifier.console.agent.ackFinished
 import com.tmuxifier.console.agent.ackNext
@@ -105,8 +106,9 @@ fun SessionScreen(
     boxLabel: String,
     onUnauthorized: () -> Unit,
     // A line to open with, in the four-second error line below: why a jump to an
-    // agent pane did not land (MainActivity's openAgent). Plain text.
-    notice: String? = null,
+    // agent pane did not land (MainActivity's land). An event: each new one shows
+    // once, even with the text of the one before. Plain text.
+    notice: JumpNotice? = null,
     bottomBar: @Composable () -> Unit = {},
 ) {
     val client = state.client() ?: return
@@ -116,7 +118,11 @@ fun SessionScreen(
     var snap by remember(boxId) { mutableStateOf<PaneSnapshot?>(null) }
     var lines by remember(boxId) { mutableStateOf<List<List<Span>>>(emptyList()) }
     var reconnecting by remember(boxId) { mutableStateOf(false) }
-    var sendError by remember(boxId, notice) { mutableStateOf(notice) }
+    // The error line's holder is new for every box and every notice event, and the
+    // four-second clear below is keyed on the holder, so it always clears the line
+    // on screen (keyed on the text alone, a second box's identical line stayed up).
+    val errorLine = remember(boxId, notice) { mutableStateOf(notice?.text) }
+    var sendError by errorLine
     var draft by remember(boxId) { mutableStateOf(state.prefs.draft(boxId)) }
     var sending by remember { mutableStateOf(false) }
     var fontSize by remember { mutableFloatStateOf(state.prefs.fontSize) }
@@ -382,9 +388,9 @@ fun SessionScreen(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
-            LaunchedEffect(msg) {
+            LaunchedEffect(errorLine, msg) {
                 delay(4_000)
-                sendError = null
+                errorLine.value = null
             }
         }
         ActionRow(onSend = { spec ->

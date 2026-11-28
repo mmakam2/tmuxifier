@@ -78,3 +78,28 @@ suspend fun runJump(
     }
     return null
 }
+
+/**
+ * Whether a jump (a row tap) or a push open that has just finished may change the
+ * screen. Its requests can take twenty seconds, and in that time the operator may
+ * have moved on: opened Settings, signed out or re-enrolled elsewhere, tapped a card,
+ * or tapped a push that started a later jump. It lands only when it is still the
+ * latest one started ([startedGen], a generation the caller bumps at every start,
+ * against [latestGen]), on the screen it started from, with the same client.
+ * Otherwise it changes neither the screen nor the notice (a repoint already made
+ * stays, as [runJump] never rolls back). The screen it started from is whatever was
+ * showing then: a push tap legitimately starts over the session or Settings screen.
+ */
+fun <S> jumpMayLand(startedGen: Int, latestGen: Int, startedOn: S, now: S, sameClient: Boolean): Boolean =
+    startedGen == latestGen && sameClient && startedOn == now
+
+/**
+ * What the session screen shows for four seconds after a jump that did not land on
+ * its pane. An event, not a string: [seq] (a counter the caller owns; the app uses
+ * the jump's generation) makes every notice its own, so the same text shown twice,
+ * or for two boxes, shows each time.
+ */
+data class JumpNotice(val text: String, val seq: Int)
+
+/** The notice for a jump's result ([runJump]'s), or null when it succeeded. */
+fun jumpNotice(failed: String?, seq: Int): JumpNotice? = failed?.let { JumpNotice("agent not selected: $it", seq) }

@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -28,10 +29,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.google.firebase.messaging.FirebaseMessaging
+import com.tmuxifier.console.agent.JumpNotice
 import com.tmuxifier.console.agent.JumpTarget
+import com.tmuxifier.console.agent.jumpMayLand
+import com.tmuxifier.console.agent.jumpNotice
 import com.tmuxifier.console.agent.planJump
 import com.tmuxifier.console.agent.runJump
 import com.tmuxifier.console.agent.targetListed
+import com.tmuxifier.console.api.ApiClient
 import com.tmuxifier.console.api.ApiException
 import com.tmuxifier.console.push.PushTarget
 import com.tmuxifier.console.push.initFirebase
@@ -181,36 +186,84 @@ private fun Shell(
     var screen by rememberSaveable(stateSaver = ScreenSaver) {
         mutableStateOf(if (state.enrolled) Screen.Fleet else Screen.Settings)
     }
-    // A jump to one agent pane in flight (one at a time), and the line the session
-    // screen shows for four seconds when it did not land.
+    // A jump to one agent pane in flight (row taps take no second one while it
+    // runs), and the line the session screen shows for four seconds when it did not
+    // land: an event, so the same text twice (or for two boxes) shows each time.
     var jumping by remember { mutableStateOf(false) }
-    var notice by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<JumpNotice?>(null) }
+    // The generation of the latest jump or push open, bumped as each one starts
+    // (startJump, openNow). A running jump whose generation is no longer the latest
+    // was overtaken by a later one and does not land; whichever started later wins.
+    // It doubles as the notice's sequence number: only the latest generation lands.
+    var jumpGen by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
 
-    // Take the operator to one agent pane: repoint the box when the pane is in
-    // another session, select its window and pane, then open the session screen.
-    // The screen opens after a failure too (the operator asked for this box), with
-    // the reason as its notice. Nothing is rolled back: a repoint that succeeded
-    // before the select failed leaves the box on the target's session, which is
-    // what the opened screen then shows. A 401 from any step is the revoked-device
-    // path, as everywhere else.
+    fun startJump(): Int {
+        jumpGen += 1
+        jumping = true
+        return jumpGen
+    }
+
+    // Only the latest jump clears `jumping`: an overtaken one finishing first must
+    // not re-enable the rows while the later one still runs.
+    fun endJump(gen: Int) {
+        if (gen == jumpGen) jumping = false
+    }
+
+    // An open that needs no request (a card tap, a push with no pane): it lands at
+    // once and overtakes a running jump, which then does not land even if the
+    // operator comes back to the screen it started from.
+    fun openNow(to: Screen) {
+        jumpGen += 1
+        jumping = false // the overtaken jump's endJump no longer matches
+        notice = null   // a notice left from an earlier jump is not about this open
+        screen = to
+    }
+
+    // Every jump and push open that made a request lands through here, and only
+    // where the operator still is (jumpMayLand): still the latest one started, on
+    // the screen it started from, with the client it started with. Otherwise
+    // neither the screen nor the notice changes.
+    fun land(gen: Int, startedOn: Screen, client: ApiClient, to: Screen, failed: String? = null) {
+        if (!jumpMayLand(gen, jumpGen, startedOn, screen, client == state.client())) return
+        notice = jumpNotice(failed, gen)
+        screen = to
+    }
+
+    // The one jump: repoint the box when the pane is in another session, select its
+    // window and pane, then open the session screen. The screen opens after a
+    // failure too (the operator asked for this box), with the reason as its notice.
+    // Nothing is rolled back: a repoint that succeeded before the select failed
+    // leaves the box on the target's session, which is what the opened screen then
+    // shows. A 401 from any step is the revoked-device path, as everywhere else.
+    suspend fun jumpAndLand(
+        gen: Int, startedOn: Screen, client: ApiClient,
+        boxId: String, label: String, configuredSession: String, target: JumpTarget,
+    ) {
+        val failed = try {
+            runJump(
+                planJump(configuredSession, target),
+                setSession = { client.setSession(boxId, it) },
+                selectPane = { s, w, p -> client.selectWindow(boxId, s, w, p) },
+            )
+        } catch (e: ApiException) {               // runJump rethrows only a 401
+            land(gen, startedOn, client, Screen.Settings)
+            return
+        }
+        land(gen, startedOn, client, Screen.Session(boxId, label), failed)
+    }
+
+    // A row tap on the fleet list.
     fun openAgent(boxId: String, label: String, configuredSession: String, target: JumpTarget) {
         val client = state.client() ?: return
         if (jumping) return                       // one jump at a time; a second tap is dropped
-        jumping = true
+        val startedOn = screen
+        val gen = startJump()
         scope.launch {
             try {
-                val failed = runJump(
-                    planJump(configuredSession, target),
-                    setSession = { client.setSession(boxId, it) },
-                    selectPane = { s, w, p -> client.selectWindow(boxId, s, w, p) },
-                )
-                notice = failed?.let { "agent not selected: $it" }
-                screen = Screen.Session(boxId, label) // also after a failure: the operator asked for this box
-            } catch (e: ApiException) {               // runJump rethrows only a 401
-                screen = Screen.Settings
+                jumpAndLand(gen, startedOn, client, boxId, label, configuredSession, target)
             } finally {
-                jumping = false
+                endJump(gen)
             }
         }
     }
@@ -220,14 +273,17 @@ private fun Shell(
     // never repointed at a session (or a window) the server no longer lists: then
     // it opens on whatever it points at now, with no notice. When the box cannot
     // be read, or is gone from the list, it opens as an older server's push does.
+    // A tap can come over any screen and while a row's jump runs: it starts a jump
+    // of its own (which overtakes that one), and lands only on the screen it was
+    // tapped over, with the same client.
     fun openFromPush(boxId: String, target: JumpTarget) {
         val client = state.client()
         if (client == null) {
-            notice = null
-            screen = Screen.Session(boxId, boxId)
+            openNow(Screen.Session(boxId, boxId))
             return
         }
-        jumping = true
+        val startedOn = screen
+        val gen = startJump()
         scope.launch {
             try {
                 val fetched = try {
@@ -238,49 +294,38 @@ private fun Shell(
                     }
                 } catch (e: ApiException) {
                     if (e.status == 401) {
-                        screen = Screen.Settings
+                        land(gen, startedOn, client, Screen.Settings)
                         return@launch
                     }
                     null
                 }
                 val box = fetched?.first?.firstOrNull { it.id == boxId }
                 if (fetched == null || box == null) {
-                    notice = null
-                    screen = Screen.Session(boxId, boxId)
+                    land(gen, startedOn, client, Screen.Session(boxId, boxId))
                     return@launch
                 }
                 val label = box.label.ifEmpty { box.id }
                 if (!targetListed(fetched.second[boxId], target)) {
-                    notice = null
-                    screen = Screen.Session(boxId, label)
+                    land(gen, startedOn, client, Screen.Session(boxId, label))
                     return@launch
                 }
-                val failed = runJump(
-                    planJump(box.sessionName, target),
-                    setSession = { client.setSession(boxId, it) },
-                    selectPane = { s, w, p -> client.selectWindow(boxId, s, w, p) },
-                )
-                notice = failed?.let { "agent not selected: $it" }
-                screen = Screen.Session(boxId, label)
-            } catch (e: ApiException) {               // runJump rethrows only a 401
-                screen = Screen.Settings
+                jumpAndLand(gen, startedOn, client, boxId, label, box.sessionName, target)
             } finally {
-                jumping = false
+                endJump(gen)
             }
         }
     }
 
     // Notification tap-through. A push with no agent pane (an older server's, or
-    // an older event's) opens that box's session, as does one that arrives while a
-    // jump is already running; one with a pane jumps to it.
+    // an older event's) opens that box's session at once; one with a pane jumps to
+    // it. Either overtakes a jump that is still running.
     LaunchedEffect(pendingPush.value) {
         val push = pendingPush.value ?: return@LaunchedEffect
         pendingPush.value = null // re-keys and cancels this effect: nothing below may suspend
         if (!state.enrolled) return@LaunchedEffect
         val target = push.jump
-        if (target == null || jumping) {
-            notice = null // a notice left from an earlier jump is not about this open
-            screen = Screen.Session(push.boxId, push.boxId)
+        if (target == null) {
+            openNow(Screen.Session(push.boxId, push.boxId))
         } else {
             openFromPush(push.boxId, target) // launches on `scope`, which outlives this effect
         }
@@ -297,7 +342,7 @@ private fun Shell(
         )
         Screen.Fleet -> FleetScreen(
             state,
-            onOpen = { notice = null; screen = it },
+            onOpen = { openNow(it) },
             onOpenAgent = ::openAgent,
             opening = jumping,
             onSettings = { screen = Screen.Settings },
