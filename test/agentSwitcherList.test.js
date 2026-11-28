@@ -23,7 +23,7 @@ test('one row per stateful agent pane: two panes of one window are two rows, nam
   expect(rows.map((r) => [r.pane, r.name])).toEqual([['%3', '2:frontend.1'], ['%4', '2:frontend.2']]);
   expect(rows[0]).toEqual({
     key: rowKey('b1', '%3'), boxId: 'b1', label: 'alpha', pane: '%3', session: 'main', windowId: '@2',
-    name: '2:frontend.1', state: 'working', agent: 'claude', ts: 1, here: false, gone: false,
+    name: '2:frontend.1', suffix: '.1', state: 'working', agent: 'claude', ts: 1, here: false, gone: false,
   });
 });
 test('entries without a state are not rows, but still count for the names', () => {

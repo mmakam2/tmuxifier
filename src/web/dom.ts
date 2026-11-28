@@ -1,5 +1,7 @@
 // Shared DOM builders for the imperative views (Proxmox hub, settings modal).
 // All text lands as text nodes / attributes — never innerHTML.
+import { agentNameParts } from './agentState';
+
 export type Attrs = Record<string, string | number | boolean | ((e: Event) => void)>;
 
 export function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = {}, children: (Node | string)[] = []): HTMLElementTagNameMap[K] {
@@ -142,3 +144,23 @@ export function makeRadio(name: string, value: string, label: string, checked = 
 export function field(label: string, control: HTMLElement) { return el('label', { class: 'field' }, [el('span', {}, [label]), control]); }
 export function err(msg: string) { return el('div', { class: 'pve-err', role: 'alert' }, [msg]); }
 export function group(label: string, ...children: (Node | string)[]) { return el('div', { class: 'pve-group' }, [el('div', { class: 'pve-eyebrow' }, [label]), ...children]); }
+
+// An agent row's name into `host`, in two spans so the window name is what an
+// ellipsis cuts and the `.<paneIndex>` that tells two split panes apart never is
+// (style.css `.agent-name-win` / `.agent-name-pane`). The suffix span exists only
+// for a name that has one. Box output: textContent only.
+export function paintAgentName(host: HTMLElement, name: string, suffix?: string): void {
+  const [base, tail] = agentNameParts(name, suffix);
+  // Repainted on every poll: unchanged text keeps its nodes.
+  const kids = host.children;
+  if (kids.length === (tail ? 2 : 1) && kids[0].className === 'agent-name-win' && kids[0].textContent === base
+    && (!tail || (kids[1].className === 'agent-name-pane' && kids[1].textContent === tail))) return;
+  const win = document.createElement('span');
+  win.className = 'agent-name-win';
+  win.textContent = base;
+  if (!tail) { host.replaceChildren(win); return; }
+  const pane = document.createElement('span');
+  pane.className = 'agent-name-pane';
+  pane.textContent = tail;
+  host.replaceChildren(win, pane);
+}

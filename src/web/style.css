@@ -700,9 +700,15 @@ button.pkbtn:disabled { opacity: .5; cursor: default; }
 }
 .box-agent:hover { background: var(--panel-2); color: var(--text); }
 .box-agent:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
-.box-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.box-agent-name { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .box-agent .badge { flex: none; }
 @media (prefers-reduced-motion: reduce) { .box-agent { transition: none; } }
+/* An agent row's name, wherever it is shown (sidebar row, board card, switcher
+   row and preview head; dom.ts paintAgentName): the window name is what the
+   ellipsis cuts, and the `.N` pane suffix that tells two split panes of one
+   window apart stays whole beside it. The host is the flex row. */
+.agent-name-win { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-name-pane { flex: none; white-space: nowrap; }
 /* The Host Shell's rows hang under its row the same way. It is pinned to the
    sidebar's foot, so a long list scrolls inside its own strip. */
 .local-agents { list-style: none; margin: 0; padding: 2px 0 0; flex: none; max-height: 30vh; overflow-y: auto; }
@@ -1128,7 +1134,7 @@ button.empty-kbd:hover { color: var(--text); }
 .dash-card:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 .dash-card-box { grid-area: box; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-card-age { grid-area: age; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
-.dash-card-session { grid-area: session; color: var(--dim); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-card-session { grid-area: session; display: flex; color: var(--dim); font-size: 11px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .dash-card-cause { grid-area: cause; color: var(--crit); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .dash-tile-bottom { display: flex; align-items: center; gap: 8px; min-height: 16px; }
 /* Service logo. Fixed square so a tall or wide source cannot shift the row,
@@ -1420,8 +1426,8 @@ button.empty-kbd:hover { color: var(--text); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .agent-switcher-session {
-  grid-area: session; min-width: 0; font-size: 12px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  grid-area: session; display: flex; min-width: 0; font-size: 12px;
+  overflow: hidden; white-space: nowrap;
 }
 .agent-switcher-chip {
   grid-area: chip; justify-self: start;
@@ -1457,7 +1463,7 @@ button.empty-kbd:hover { color: var(--text); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .agent-switcher-preview-session {
-  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 1 auto; display: flex; min-width: 0; overflow: hidden; white-space: nowrap;
 }
 .agent-switcher-preview-head .agent-switcher-chip { flex: 0 0 auto; margin-left: auto; }
 .agent-switcher-preview-body {

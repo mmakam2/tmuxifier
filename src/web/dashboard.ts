@@ -9,6 +9,8 @@ import type { PveLinkedGuest, PveClusterNode } from './proxmox';
 import { dotClassFor, dotTitleFor } from './statusDot';
 import { buildClawd } from './clawd';
 import { AGENT_PRECEDENCE, agentCards, agentChipText, fmtAge, latestAgents, worstOf, type AgentCard } from './agentState';
+import { sidebarSeries } from './agentJump';
+import { paintAgentName } from './dom';
 import { fmtLatency, fmtCount, fmtCompact, fmtUptime, fmtBytes } from './fmt';
 import { buildTruenasCard, type TruenasCardEls } from './truenasCard';
 import { buildUnifiCard, type UnifiCardEls } from './unifiCard';
@@ -433,7 +435,9 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
   }
 
   function paintBoard() {
-    const cols = agentCards(data.boxes, data.series);
+    // The sidebar's basis (sidebarSeries: the Host Shell's own session only), which
+    // is also what a card's click resolves its jump through: a card is never a dead click.
+    const cols = agentCards(data.boxes, sidebarSeries(data.series));
     const seen = new Set<string>();
     const now = Date.now();
     let any = false;
@@ -449,7 +453,7 @@ export function createDashboard(hooks: DashboardHooks): { el: HTMLElement; updat
         if (!c) { c = makeBoardCard(card.boxId, card.pane); boardCardEls.set(key, c); }
         c.root.dataset.state = st;
         c.box.textContent = card.label;
-        c.session.textContent = card.name; // the row's own name, as the sidebar says it
+        paintAgentName(c.session, card.name, card.suffix); // the row's own name, as the sidebar says it
         // The cause rides blocked cards only, and is absent (not hidden) on the
         // rest, so a card that moved columns never carries a stale reason.
         if (st === 'blocked' && card.cause) {

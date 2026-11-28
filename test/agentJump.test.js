@@ -115,7 +115,7 @@ test('a fleet-wide series releases every box whose jump it covers, and no other'
   expect(h.held('b2')).toBe(true);
 });
 
-test('a second jump to the same box keeps the hold until both are covered', () => {
+test('a second jump to the same box keeps the hold while its select is out, and a later jump\'s cover releases both', () => {
   const h = createSeenHold();
   const first = h.begin('b1', '%1');
   const second = h.begin('b1', '%2');
@@ -126,6 +126,108 @@ test('a second jump to the same box keeps the hold until both are covered', () =
   h.settle('b1', second, true, 20);
   expect(h.held('b1')).toBe(true);
   h.applied('b1', h.fetchStarted(), at(both), 30);
+  expect(h.held('b1')).toBe(false);
+});
+
+// Two jumps of one box to different windows: the earlier target is never visible again once the
+// later select has moved the window, so it must not hold the box until HOLD_MAX_MS.
+test('a later jump supersedes an earlier one: its cover releases every hold of the box', () => {
+  const h = createSeenHold();
+  const first = h.begin('b1', '%1');
+  h.settle('b1', first, true, 0);
+  const second = h.begin('b1', '%2');
+  h.settle('b1', second, true, 10);
+  // Fetched after both settles: %2 in front, %1 in a background window.
+  h.applied('b1', h.fetchStarted(), at({ b1: { ...shows('%1', false), ...shows('%2', true) } }), 20);
+  expect(h.held('b1')).toBe(false);
+});
+
+test('a later jump supersedes nothing while an earlier select is still out, nor before its own cover', () => {
+  const h = createSeenHold();
+  const first = h.begin('b1', '%1');
+  const second = h.begin('b1', '%2');
+  h.settle('b1', second, true, 10); // the later select answered first
+  h.applied('b1', h.fetchStarted(), at({ b1: { ...shows('%1', false), ...shows('%2', true) } }), 20);
+  expect(h.held('b1')).toBe(true); // the first select may still move the window
+  h.settle('b1', first, true, 30); // its answer arrives last; the box ran it first
+  h.applied('b1', h.fetchStarted(), at({ b1: { ...shows('%1', false), ...shows('%2', true) } }), 40);
+  expect(h.held('b1')).toBe(false); // the latest BEGUN jump is covered: begin order, not answer order
+  // A series that shows only the earlier target in front releases the earlier jump alone.
+  const back = createSeenHold();
+  const a = back.begin('b1', '%1');
+  const b = back.begin('b1', '%2');
+  back.settle('b1', a, true, 0);
+  back.settle('b1', b, true, 10);
+  back.applied('b1', back.fetchStarted(), at({ b1: { ...shows('%1', true), ...shows('%2', false) } }), 20);
+  expect(back.held('b1')).toBe(true);
+  back.applied('b1', back.fetchStarted(), at({ b1: { ...shows('%1', false), ...shows('%2', true) } }), 30);
+  expect(back.held('b1')).toBe(false);
+
+  const stale = createSeenHold();
+  stale.settle('b1', stale.begin('b1', '%1'), true, 0);
+  stale.settle('b1', stale.begin('b1', '%2'), true, 10);
+  stale.applied('b1', stale.fetchStarted(), at({ b1: { ...shows('%1', true), ...shows('%2', false) } }), 20);
+  expect(stale.held('b1')).toBe(true); // the series still shows the earlier jump's window: not the later's cover
+});
+
+test('a refused later jump supersedes nothing: the earlier one still waits for its own cover', () => {
+  const h = createSeenHold();
+  const first = h.begin('b1', '%1');
+  h.settle('b1', first, true, 0);
+  const second = h.begin('b1', '%2');
+  h.settle('b1', second, false, 10);
+  h.applied('b1', h.fetchStarted(), at({ b1: { ...shows('%1', false), ...shows('%2', false) } }), 20);
+  expect(h.held('b1')).toBe(true);
+  h.applied('b1', h.fetchStarted(), at({ b1: { ...shows('%1', true), ...shows('%2', false) } }), 30);
+  expect(h.held('b1')).toBe(false);
+});
+
+// ── A picker pick of a window in another session (no target pane) ──────────
+const inSession = (session, windowId, visible) => entry({ session, windowId, visible, focused: visible });
+
+test('a window hold is covered by a series fetched after the settle in which nothing of the session outside the window is visible', () => {
+  const h = createSeenHold();
+  const j = h.beginWindow('b1', 'main', '@2');
+  expect(h.held('b1')).toBe(true);
+  const oldView = { '%1': inSession('main', '@1', true), '%2': inSession('main', '@2', false), '%9': inSession('web', '@5', true) };
+  const newView = { '%1': inSession('main', '@1', false), '%2': inSession('main', '@2', true), '%9': inSession('web', '@5', true) };
+  h.applied('b1', h.fetchStarted(), at({ b1: newView }), 0); // before the settle
+  expect(h.held('b1')).toBe(true);
+  h.settle('b1', j, true, 10);
+  h.applied('b1', h.fetchStarted(), at({ b1: oldView }), 20); // after, but the old window still in front
+  expect(h.held('b1')).toBe(true);
+  h.applied('b1', h.fetchStarted(), at({ b1: newView }), 30); // another session's visible pane says nothing
+  expect(h.held('b1')).toBe(false);
+  // A session with no agent visible outside the window is covered at once, as is a box gone.
+  const quiet = createSeenHold();
+  quiet.settle('b1', quiet.beginWindow('b1', 'main', '@2'), true, 0);
+  quiet.applied('b1', quiet.fetchStarted(), at({ b1: { '%1': inSession('main', '@1', false) } }), 10);
+  expect(quiet.held('b1')).toBe(false);
+  const gone = createSeenHold();
+  gone.settle('b1', gone.beginWindow('b1', 'main', '@2'), true, 0);
+  gone.applied('b1', gone.fetchStarted(), at({}), 10);
+  expect(gone.held('b1')).toBe(false);
+  // HOLD_MAX_MS is still the last resort.
+  const capped = createSeenHold();
+  capped.settle('b1', capped.beginWindow('b1', 'main', '@2'), true, 0);
+  capped.applied('b1', capped.fetchStarted(), at({ b1: oldView }), HOLD_MAX_MS);
+  expect(capped.held('b1')).toBe(false);
+});
+
+test('cancel releases a hold at once (a refused or failed select moved nothing), and only that one', () => {
+  const h = createSeenHold();
+  const j = h.beginWindow('b1', 'main', '@2');
+  h.cancel('b1', j);
+  expect(h.held('b1')).toBe(false);
+  const jump = h.begin('b1', '%1');
+  const pick = h.beginWindow('b1', 'main', '@2');
+  h.cancel('b1', pick);
+  expect(h.held('b1')).toBe(true); // the jump's hold stays
+  h.cancel('b1', 999); // unknown: harmless
+  h.cancel('b2', jump); // another box: harmless
+  expect(h.held('b1')).toBe(true);
+  h.settle('b1', jump, true, 0);
+  h.applied('b1', h.fetchStarted(), at({ b1: shows('%1', true) }), 10);
   expect(h.held('b1')).toBe(false);
 });
 

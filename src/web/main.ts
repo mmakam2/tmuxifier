@@ -23,7 +23,7 @@ import { createLiveQueue, openLiveLink, type LiveSocket } from './liveLink';
 import { partitionJobs, jobLamp, jobReadout, jobClock, runningCount } from './fleetJobs';
 import { createInteractiveLauncher } from './interactiveLauncher';
 import { closeAllModals, registerModal } from './modalRegistry';
-import { el, openModal, makeRadio, modalOpen, syncTabSelection, wireTabStrip } from './dom';
+import { el, openModal, makeRadio, modalOpen, paintAgentName, syncTabSelection, wireTabStrip } from './dom';
 import { freshBoxFrom } from './freshBox';
 import { armReduce, ARM_MS, IDLE as ARM_IDLE, type ArmState } from './arming';
 import { createSetupJobPoller } from './setupPoller';
@@ -211,7 +211,7 @@ function repaintSparklines() {
 // The rows are siblings of `li.box`, never inside it, so a row click cannot
 // reach the box row's open handler; it is left to bubble on purpose, because
 // phone mode's delegated drawer close (CLOSES_DRAWER) listens on the sidebar.
-const rowKeyOf = (r: AgentRow): string => JSON.stringify([r.pane, r.name, r.state, r.cause ?? '', r.agent]);
+const rowKeyOf = (r: AgentRow): string => JSON.stringify([r.pane, r.name, r.suffix ?? '', r.state, r.cause ?? '', r.agent]);
 
 function paintAgentRow(btn: HTMLButtonElement, r: AgentRow) {
   const key = rowKeyOf(r);
@@ -221,7 +221,7 @@ function paintAgentRow(btn: HTMLButtonElement, r: AgentRow) {
   const chipText = agentChipText(r.state, r.cause);
   const name = document.createElement('span');
   name.className = 'box-agent-name';
-  name.textContent = r.name;
+  paintAgentName(name, r.name, r.suffix);
   const chip = document.createElement('span');
   chip.className = `badge badge-agent-${r.state}`;
   // Clawd rides the working state only: motion means "agent busy".
@@ -910,6 +910,16 @@ function pollStatus(): Promise<void> {
   pollPromise = trackFleet(pollStatusOnce().finally(() => { pollPromise = null; }));
   return pollPromise;
 }
+// A poll whose series fetch STARTS after this call: pollStatus hands back the
+// poll in flight, whose fetch may have started earlier, so wait that one out
+// and poll once more (the single-flight stays as it is for every other caller:
+// a poll started by someone else meanwhile is joined, and it started after this
+// call too). What a settled seen hold needs to be covered without waiting for
+// the next nudge or the 30 s interval.
+async function pollStatusAfter(): Promise<void> {
+  if (pollPromise) { try { await pollPromise; } catch { /* the next one is what counts */ } }
+  await pollStatus();
+}
 
 async function pollStatusOnce() {
   if (polling) return;
@@ -1425,23 +1435,40 @@ async function killTarget(id: string, t: SessionTarget) {
 // another session needs both, window first: switchPaneSession drops this
 // pane's own PTY, so selecting the window beforehand means the reopen lands
 // already on it.
+//
+// The cross-session window pick holds the box's acknowledgements like a jump
+// (seenHold, beginWindow): the switch repaints at once against a series that
+// still shows the picked session's OLD window in front, and reportSeen would
+// acknowledge the done agents of the window the pick just moved away from,
+// never shown. The hold is taken before the select and settled after it; a
+// refused or failed select moved nothing and cancels it at once.
 async function selectTarget(id: string, t: SessionTarget) {
   // A start row is an action, not a place: its session is '' until the start answers.
   if (t.kind === 'start') { await startWorker(id, t); return; }
+  const crossing = attachedSession(id) !== t.session;
   if (t.kind === 'window' && t.windowId) {
+    const box = boxOfInstance(id);
+    const hold = crossing ? seenHold.beginWindow(box, t.session, t.windowId) : 0;
     try {
       // The session goes with the id: a grouped session shares its windows, so
       // the id alone does not name one session (see buildSelectWindowRemote).
-      await api.selectWindow(boxOfInstance(id), t.session, t.windowId);
+      await api.selectWindow(box, t.session, t.windowId);
     } catch {
+      if (crossing) seenHold.cancel(box, hold);
       // The window vanished between the poll and the click (502) or the box is
       // mid-setup (409): repaint so the select snaps back rather than showing a
       // switch that never happened.
       updatePaneHeaders();
       return;
     }
+    if (crossing) {
+      seenHold.settle(box, hold, true, Date.now());
+      switchPaneSession(id, t.session);
+      void pollStatusAfter();
+      return;
+    }
   }
-  if (attachedSession(id) !== t.session) { switchPaneSession(id, t.session); return; }
+  if (crossing) { switchPaneSession(id, t.session); return; }
   // Same session: nothing was persisted, so the header only moves once the
   // status snapshot does. ONE poll is enough and it is authoritative — the
   // route re-probes this box before it answers, so by the time we get here the
@@ -2784,12 +2811,18 @@ function openPaneOnSession(boxId: string, session: string) {
 // hand says is visible, which is the window the jump is LEAVING. So the box's
 // acknowledgements are held (seenHold) from BEFORE the dock until a series
 // fetched after the select settled shows the pane visible (any such series
-// after a refused select; HOLD_MAX_MS at most). The finally settles this jump
-// on every path, so the hold always ends with a later applied series.
+// after a refused select; a later jump of the box that is covered releases
+// this one too; HOLD_MAX_MS at most). The finally settles this jump on every
+// path, so the hold always ends with a later applied series. A pane that is
+// already focused only docks: no hold, select or refresh.
 async function jumpToTarget(t: JumpTarget, dock: () => void): Promise<void> {
   // Already tmux's focused pane: the window in front does not move, so what the
-  // series says is visible is true, and there is nothing to refresh or hold.
-  if (!needsSelect(t)) { dock(); return; }
+  // series says is visible is true, and there is nothing to refresh or hold. A
+  // dock that throws is answered as on the other path.
+  if (!needsSelect(t)) {
+    try { dock(); } catch (e: any) { updatePaneHeaders(); showToast(e?.message || 'jump failed', 'error'); }
+    return;
+  }
   const jump = seenHold.begin(t.boxId, t.pane);
   let ok = false;
   try {
@@ -2807,8 +2840,9 @@ async function jumpToTarget(t: JumpTarget, dock: () => void): Promise<void> {
   }
   // Even after a failure: a 502 means the listing moved, and the refreshed
   // series drops the row that pointed at it. The series that shows the pane in
-  // front arrives with the box's next re-read (its /live nudge) or this poll.
-  void pollStatus();
+  // front arrives with the box's next re-read (its /live nudge) or this poll,
+  // whose fetch starts after the settle (a poll already in flight may not).
+  void pollStatusAfter();
 }
 
 // The pane's jump target from the latest sample, as the sidebar lists it.

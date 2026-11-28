@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { AGENT_LABEL, agentChipText, agentCounts, agentCards, fmtAge, latestAgents, agentRows, worstOf, sessionAgents, windowAgents, visibleDone, eventPlace } from '../src/web/agentState.ts';
+import { AGENT_LABEL, agentChipText, agentCounts, agentCards, fmtAge, latestAgents, agentRows, worstOf, sessionAgents, windowAgents, visibleDone, eventPlace, agentNameParts } from '../src/web/agentState.ts';
 
 const S = (agents) => [{ t: 1, up: true, agents }];
 const e = (over) => ({ session: 'main', windowId: '@1', windowIndex: 2, windowName: 'frontend', paneIndex: 1, agent: 'claude', state: 'working', ts: 10, visible: true, focused: false, attached: true, ...over });
@@ -124,4 +124,22 @@ test('eventPlace', () => {
   expect(eventPlace({})).toBe('');
   expect(eventPlace({ session: 'main', window: '2:frontend', paneIndex: 0 })).toBe('main › 2:frontend.0');
   expect(eventPlace({ window: '2:frontend' })).toBe('2:frontend');
+});
+
+// The `.<paneIndex>` that tells two split panes apart is carried on its own, so a renderer can
+// keep it whole while the window name is cut (dom.ts paintAgentName).
+test('agentRows and agentCards carry the pane suffix only when the name has one', () => {
+  const rows = agentRows({ '%1': e({}), '%2': e({ paneIndex: 2 }), '%5': e({ session: 'side', windowId: '@4', windowIndex: 1, windowName: 'solo' }) });
+  expect(rows.map((r) => [r.name, r.suffix])).toEqual([['main › 2:frontend.1', '.1'], ['main › 2:frontend.2', '.2'], ['side › 1:solo', undefined]]);
+  expect(Object.hasOwn(rows[2], 'suffix')).toBe(false);
+  const cards = agentCards([{ id: 'b1', label: 'web01' }], { b1: S({ '%1': e({}), '%2': e({ paneIndex: 2 }), '%9': e({ windowId: '@9', windowIndex: 9 }) }) });
+  expect(cards.working.map((c) => [c.name, c.suffix])).toEqual([['2:frontend.1', '.1'], ['2:frontend.2', '.2'], ['9:frontend', undefined]]);
+  expect(Object.hasOwn(cards.working[2], 'suffix')).toBe(false);
+});
+
+test('agentNameParts splits off the suffix the name ends with, and nothing else', () => {
+  expect(agentNameParts('main › 2:a-very-long-window-name.2', '.2')).toEqual(['main › 2:a-very-long-window-name', '.2']);
+  expect(agentNameParts('2:frontend', undefined)).toEqual(['2:frontend', '']);
+  expect(agentNameParts('2:frontend', '.3')).toEqual(['2:frontend', '']); // not its suffix
+  expect(agentNameParts('.2', '.2')).toEqual(['.2', '']); // nothing would be left to cut
 });

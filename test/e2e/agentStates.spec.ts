@@ -311,6 +311,11 @@ test('sidebar: one row per agent pane, per-pane seen, and a row click jumps to t
     // pane, each with its own chip; nothing agent-shaped left in the badges.
     await reloadUntil(page, async () => { await expect(rows).toHaveCount(3, { timeout: 5000 }); });
     await expect(rows.locator('.box-agent-name')).toHaveText([one.name, twoA.name, twoB.name]);
+    // The `.N` of a split pane is its own element, so an ellipsis cuts the window
+    // name and never the part that tells the two apart; a lone pane has none.
+    await expect(rows.locator('.box-agent-name .agent-name-pane')).toHaveText([`.${twoA.paneIndex}`, `.${twoB.paneIndex}`]);
+    await expect(agentRow(one.pane).locator('.agent-name-pane')).toHaveCount(0);
+    await expect(agentRow(one.pane).locator('.agent-name-win')).toHaveText(one.name);
     expect(await rows.evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.pane))).toEqual([one.pane, twoA.pane, twoB.pane]);
     expect(await row.evaluate((li) => {
       const next = li.nextElementSibling as HTMLElement | null;
@@ -371,8 +376,9 @@ test('sidebar: one row per agent pane, per-pane seen, and a row click jumps to t
 // nudged single-box read), never on wall-clock time. None of them touches a
 // Host Shell row: the e2e server's Host Shell is this machine's real `local`
 // session, and a jump there would move the operator's own windows.
-async function rowsFixture(page: Page, states: [one: string, twoA: string, twoB: string]) {
+async function rowsFixture(page: Page, states: [one: string, twoA: string, twoB: string], prepare?: (layout: AgentPaneLayout) => void) {
   const layout = buildAgentPanes(session);
+  prepare?.(layout); // on the box, before the page reads anything
   const t0 = now();
   // ready/stop reads `done` until seen.
   const marker = (pane: string, st: string) => {
@@ -404,7 +410,7 @@ async function rowsFixture(page: Page, states: [one: string, twoA: string, twoB:
     await expect(group.locator('button.box-agent')).toHaveCount(3, { timeout: 5000 });
     await expect(agentRow(layout.twoB.pane)).toHaveAttribute('data-state', states[2], { timeout: 5000 });
   });
-  return { layout, t0, seenPosts, windowPosts, moreReads, agentRow };
+  return { layout, t0, seenPosts, windowPosts, moreReads, agentRow, boxId };
 }
 
 // Spec 2026-11-26 §7.3 step 3: docking the box repaints the stage while the
@@ -438,6 +444,126 @@ test('a jump into an undocked box acknowledges every done agent of the window it
     await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'done');
     await expect(f.agentRow(twoB.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
     await expect(f.agentRow(twoA.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
+  } finally {
+    resetAgentPanes(layout, session);
+  }
+});
+
+// The same rule through the pane header's picker (B1 of the final review): a
+// pick of a window in ANOTHER session switches the pane at once, and the repaint
+// runs against a series that still shows that session's OLD window in front. Its
+// done agent was never on screen and must not be acknowledged; the picked
+// window's done agent is, once fresh data shows it in front.
+test('a picker pick of a window in another session acknowledges the window it lands on, never the one it leaves', async ({ page }) => {
+  test.setTimeout(240000);
+  let layout: AgentPaneLayout | null = null;
+  const other = `${session}-pk`;
+  try {
+    onBox(`tmux has-session -t '=${other}' 2>/dev/null || tmux new-session -d -s '${other}'`);
+    const f = await rowsFixture(page, ['working', 'done', 'blocked']);
+    layout = f.layout;
+    const { one, twoA, twoB } = f.layout;
+    await page.bringToFront();
+    expect(await page.evaluate(() => document.hasFocus())).toBe(true);
+    // Dock the box (window 1 in front, nothing done on screen), then move the pane to `other`.
+    await page.locator('.box .name', { hasText: /^localhost$/ }).click();
+    const pane = page.locator('.stage-pane').first();
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_ONE', { timeout: 15000 });
+    const picker = pane.locator('.session-picker');
+    await picker.locator('.session-picker-trigger').click();
+    await picker.locator(`.session-picker-row[data-key="s:${other}"] .session-picker-pick`).click();
+    await expect(pane.locator('.xterm-rows')).not.toContainText('AGENT_WINDOW_ONE', { timeout: 15000 });
+    // Window 1's agent finishes while the pane shows `other`: window 1 is still
+    // the current window of `session`.
+    writePaneMarker(session, one.pane, 'ready', f.t0 + 1, 'stop');
+    await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'done', { timeout: 45000 });
+    expect(f.seenPosts).toEqual([]);
+
+    await picker.locator('.session-picker-trigger').click();
+    await picker.locator(`.session-picker-row[data-key="w:${session}:${twoA.windowId}"] .session-picker-pick`).click();
+    await expect.poll(() => f.windowPosts.length, { timeout: 10000 }).toBe(1);
+    expect(f.windowPosts[0]).toEqual({ session, windowId: twoA.windowId });
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_TWO_A', { timeout: 15000 });
+    // The picked window's done agent is acknowledged...
+    await expect.poll(() => f.seenPosts.filter((p) => p.pane === twoA.pane).length, { timeout: 45000 }).toBe(1);
+    await f.moreReads(1);
+    expect(f.seenPosts.filter((p) => p.pane === twoA.pane)).toEqual([{ pane: twoA.pane, ts: f.t0 }]);
+    await expect(f.agentRow(twoA.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
+    // ...and the left window's never was.
+    expect(f.seenPosts.filter((p) => p.pane === one.pane)).toEqual([]);
+    expect(f.seenPosts.filter((p) => p.pane === twoB.pane)).toEqual([]);
+    await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'done');
+  } finally {
+    resetAgentPanes(layout, session);
+    try { onBox(`tmux kill-session -t '=${other}'`); } catch { /* gone */ }
+  }
+});
+
+// Two quick jumps to different windows of one box (B2 of the final review): the
+// first jump's target is never in front again, so its hold must not outlast the
+// second jump's cover. The first select runs on the box at once, but its answer
+// is held back until the second jump's select has run and been answered: the
+// jumps overlap, and the first settles last, when the box already shows the
+// second's window.
+test('two quick jumps to different windows of one box: the window landed on is acknowledged well inside the hold cap', async ({ page }) => {
+  test.setTimeout(240000);
+  let layout: AgentPaneLayout | null = null;
+  try {
+    // Window 2 in front, its first pane focused: neither jump below is to a focused pane.
+    const f = await rowsFixture(page, ['done', 'working', 'done'], (l) => {
+      onBox(`tmux select-window -t '=${session}:${l.twoA.windowId}' && tmux select-pane -t '=${session}:${l.twoA.windowId}.${l.twoA.pane}'`);
+    });
+    layout = f.layout;
+    const { one, twoA, twoB } = f.layout;
+    // The page's own series says so before the first click.
+    await reloadUntil(page, async () => {
+      expect(await page.evaluate(async ([b, p]) => {
+        const r = await fetch(`/api/health/series?box=${encodeURIComponent(b)}`);
+        return (await r.json())[b]?.at(-1)?.agents?.[p]?.focused === true;
+      }, [f.boxId, twoA.pane] as const)).toBe(true);
+    });
+    await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'done');
+    await page.bringToFront();
+    expect(await page.evaluate(() => document.hasFocus())).toBe(true);
+
+    let posts = 0;
+    let firstRan: Promise<unknown> | null = null;
+    let secondAnswered!: () => void;
+    const second = new Promise<void>((r) => { secondAnswered = r; });
+    await page.route('**/api/boxes/*/window', async (route) => {
+      posts += 1;
+      if (posts === 1) {
+        firstRan = route.fetch();
+        const res = await firstRan;
+        await second;
+        await route.fulfill({ response: res as Awaited<ReturnType<typeof route.fetch>> });
+      } else {
+        await firstRan; // the box runs the selects in the order they were sent
+        await route.fulfill({ response: await route.fetch() });
+        secondAnswered();
+      }
+    });
+
+    await f.agentRow(twoB.pane).click();
+    await expect.poll(() => f.windowPosts.length, { timeout: 10000 }).toBe(1);
+    const started = Date.now();
+    await f.agentRow(one.pane).click();
+    await expect.poll(() => f.windowPosts.length, { timeout: 10000 }).toBe(2);
+    expect(f.windowPosts).toEqual([
+      { session, windowId: twoB.windowId, paneId: twoB.pane },
+      { session, windowId: one.windowId, paneId: one.pane },
+    ]);
+    const pane = page.locator('.stage-pane').first();
+    await expect(pane.locator('.xterm-rows')).toContainText('AGENT_WINDOW_ONE', { timeout: 15000 });
+    expect(onBox(`tmux display-message -p -t '=${session}:' '#{window_id} #{pane_id}'`).trim()).toBe(`${one.windowId} ${one.pane}`);
+    // The landing window's done is acknowledged long before the 60 s cap would free the box.
+    await expect.poll(() => f.seenPosts.filter((p) => p.pane === one.pane).length, { timeout: 25000 }).toBe(1);
+    expect(Date.now() - started).toBeLessThan(30000);
+    await expect(f.agentRow(one.pane)).toHaveAttribute('data-state', 'idle', { timeout: 45000 });
+    // The first jump's target, behind it now, never was.
+    await f.moreReads(1);
+    expect(f.seenPosts.filter((p) => p.pane === twoB.pane)).toEqual([]);
+    await expect(f.agentRow(twoB.pane)).toHaveAttribute('data-state', 'done');
   } finally {
     resetAgentPanes(layout, session);
   }

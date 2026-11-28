@@ -28,6 +28,7 @@ export interface SwitcherRow {
   session: string;
   windowId: string;
   name: string;
+  suffix?: string; // the `.<paneIndex>` the name ends with (AgentRow.suffix)
   state: AgentState;
   cause?: AgentCause;
   agent?: AgentKind;
@@ -79,6 +80,7 @@ export function switcherRows(i: {
         here: !!i.focused && i.focused.boxId === boxId && i.focused.session === a.session && a.focused,
         gone: false,
       };
+      if (a.suffix) row.suffix = a.suffix;
       if (a.cause) row.cause = a.cause;
       rows.push(row);
     }
@@ -117,6 +119,8 @@ export function liveRows(frozen: SwitcherRow[], series: Record<string, Sample[]>
     const next: SwitcherRow = { ...r, session: a.session, windowId: a.windowId, name: a.name, state: a.state, agent: a.agent, ts: a.ts, gone: false };
     delete next.cause;
     if (a.cause) next.cause = a.cause;
+    delete next.suffix;
+    if (a.suffix) next.suffix = a.suffix;
     return next;
   });
 }

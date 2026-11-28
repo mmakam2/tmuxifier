@@ -44,7 +44,7 @@ export function agentCounts(series: Record<string, Sample[]>): Record<AgentState
   return out;
 }
 
-export interface AgentCard { boxId: string; label: string; pane: string; session: string; windowId: string; name: string; state: AgentState; cause?: AgentCause; ts: number }
+export interface AgentCard { boxId: string; label: string; pane: string; session: string; windowId: string; name: string; suffix?: string; state: AgentState; cause?: AgentCause; ts: number }
 
 const LOCAL_SERIES_KEY = '__local__';
 
@@ -59,6 +59,7 @@ export function agentCards(boxes: { id: string; label: string }[], series: Recor
     if (label === undefined) continue;
     for (const r of agentRows(latestAgents(samples))) {
       const card: AgentCard = { boxId, label, pane: r.pane, session: r.session, windowId: r.windowId, name: r.name, state: r.state, ts: r.ts };
+      if (r.suffix) card.suffix = r.suffix;
       if (r.cause) card.cause = r.cause;
       out[r.state].push(card);
     }
@@ -68,9 +69,11 @@ export function agentCards(boxes: { id: string; label: string }[], series: Recor
 }
 
 // One row of a box's agent list: a pane with a state, named by the rule in this
-// file's header.
+// file's header. `suffix` is the `.<paneIndex>` the name ends with, present only
+// when the name has one, so a renderer can keep it whole while the window name
+// is cut (paintAgentName in dom.ts).
 export interface AgentRow {
-  pane: string; session: string; windowId: string; name: string;
+  pane: string; session: string; windowId: string; name: string; suffix?: string;
   state: AgentState; cause?: AgentCause; agent: AgentKind; ts: number;
   visible: boolean; focused: boolean;
 }
@@ -95,9 +98,11 @@ export function agentRows(agents: Record<string, AgentEntry> | undefined): Agent
   for (const [pane, e] of entries) {
     if (!e.state) continue;
     let name = `${e.windowIndex}:${e.windowName || 'window'}`;
-    if ((perWindow.get(e.session)?.get(e.windowId) ?? 0) > 1) name += `.${e.paneIndex}`;
+    const suffix = (perWindow.get(e.session)?.get(e.windowId) ?? 0) > 1 ? `.${e.paneIndex}` : '';
+    name += suffix;
     if (acrossSessions) name = `${e.session} › ${name}`;
     const row: AgentRow = { pane, session: e.session, windowId: e.windowId, name, state: e.state, agent: e.agent, ts: e.ts ?? 0, visible: e.visible, focused: e.focused };
+    if (suffix) row.suffix = suffix;
     if (e.cause) row.cause = e.cause;
     rows.push({ row, windowIndex: e.windowIndex, paneIndex: e.paneIndex });
   }
@@ -157,4 +162,11 @@ export function fmtAge(fromEpochSec: number, nowMs: number): string {
   if (sec < 3600) return `${Math.floor(sec / 60)}m`;
   if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
   return `${Math.floor(sec / 86400)}d`;
+}
+
+// A row name as [what may be cut, what must stay whole]: the window part and
+// the `.<paneIndex>` suffix the name ends with. A suffix the name does not end
+// with is ignored (the whole name is then the first part).
+export function agentNameParts(name: string, suffix?: string): [string, string] {
+  return suffix && name.length > suffix.length && name.endsWith(suffix) ? [name.slice(0, -suffix.length), suffix] : [name, ''];
 }

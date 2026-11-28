@@ -62,8 +62,25 @@ export function sidebarSeries(series: Record<string, Sample[]>): Record<string, 
 //    one on its next probe), which is why "fetched after" alone is not enough;
 //  - and never later than HOLD_MAX_MS after the select settled, so a pane the
 //    operator has since moved away from cannot hold the box for good.
+// A pane-header pick of a window in ANOTHER session holds the same way, with
+// no target pane (beginWindow): it is covered by such a series in which no
+// entry of that session outside the picked window is visible (the picked
+// window is in front, or nothing of the session that could be acknowledged
+// wrongly is), or that no longer lists the box. A select that is refused or
+// fails before anything is docked moved nothing at all and is cancelled at
+// once (cancel).
 // Each jump is its own entry, so a second jump to the same box never releases
 // the first one's hold early, and the box is held while any entry remains.
+// But a later jump supersedes the earlier ones (their targets are behind it
+// now and may never be visible again): once every select of the box has
+// settled, a series fetched after the last settle that covers the LATEST begun
+// jump whose select went through releases every hold of the box. "Latest" is
+// begin order, which is the order the selects were sent and so the order the
+// box ran them; answers can arrive in any order. A refused select supersedes
+// nothing, and nothing is superseded while a select is still out, since it may
+// yet move the window. Until then an earlier jump is still released on its own
+// cover, and the latest begun one is kept, since it is what speaks for them all
+// (a box that ran two selects out of their send order waits for the cap).
 //
 // fetchStarted() is called as a series fetch starts and returns its tick;
 // applied(boxId, tick, agentsOf, nowMs) as its answer is applied (boxId null:
@@ -72,41 +89,80 @@ export const HOLD_MAX_MS = 60_000;
 
 export interface SeenHold {
   begin(boxId: string, pane: string): number;
+  beginWindow(boxId: string, session: string, windowId: string): number;
   settle(boxId: string, jump: number, ok: boolean, nowMs: number): void;
+  cancel(boxId: string, jump: number): void;
   fetchStarted(): number;
   applied(boxId: string | null, tick: number, agentsOf: (boxId: string) => Record<string, AgentEntry> | undefined, nowMs: number): void;
   held(boxId: string): boolean;
 }
 
-interface HeldJump { pane: string; settled: null | { clock: number; ok: boolean; at: number } }
+type Cover = { pane: string } | { session: string; windowId: string };
+interface HeldJump { cover: Cover; settled: null | { clock: number; ok: boolean; at: number } }
 
 export function createSeenHold(): SeenHold {
   let clock = 0;
   let nextJump = 0;
+  // box -> jump id -> jump; ids grow, and a Map keeps insertion order, so the
+  // last entry is the latest begun.
   const jumps = new Map<string, Map<number, HeldJump>>();
+  // What the jump waits to see in front, once its select went through.
+  const inFront = (c: Cover, agents: Record<string, AgentEntry>): boolean => {
+    if ('pane' in c) return !Object.hasOwn(agents, c.pane) || agents[c.pane]?.visible === true;
+    for (const pane of Object.keys(agents)) {
+      const e = agents[pane];
+      if (e && e.session === c.session && e.windowId !== c.windowId && e.visible === true) return false;
+    }
+    return true;
+  };
   const covered = (j: HeldJump, tick: number, agents: Record<string, AgentEntry> | undefined, nowMs: number): boolean => {
     if (!j.settled || tick <= j.settled.clock) return false;
     if (!j.settled.ok || nowMs - j.settled.at >= HOLD_MAX_MS) return true;
-    if (!agents || !Object.hasOwn(agents, j.pane)) return true;
-    return agents[j.pane]?.visible === true;
+    if (!agents) return true;
+    return inFront(j.cover, agents);
   };
   const release = (boxId: string, tick: number, agents: Record<string, AgentEntry> | undefined, nowMs: number) => {
     const mine = jumps.get(boxId);
     if (!mine) return;
-    for (const [id, j] of mine) if (covered(j, tick, agents, nowMs)) mine.delete(id);
-    if (!mine.size) jumps.delete(boxId);
+    // The supersede rule: every select settled, this series fetched after the
+    // last settle, and the latest begun jump that went through covered (none
+    // went through: nothing moved, and the series covers them all).
+    let allSettled = true;
+    let lastClock = 0;
+    let latestOk: HeldJump | null = null;
+    let latestId = 0;
+    for (const [id, j] of mine) {
+      latestId = id;
+      if (!j.settled) { allSettled = false; continue; }
+      lastClock = Math.max(lastClock, j.settled.clock);
+      if (j.settled.ok) latestOk = j;
+    }
+    if (allSettled && tick > lastClock && (!latestOk || covered(latestOk, tick, agents, nowMs))) {
+      jumps.delete(boxId);
+      return;
+    }
+    // Otherwise each earlier jump on its own cover.
+    for (const [id, j] of mine) if (id !== latestId && covered(j, tick, agents, nowMs)) mine.delete(id);
+  };
+  const add = (boxId: string, cover: Cover): number => {
+    const id = ++nextJump;
+    const mine = jumps.get(boxId) ?? new Map<number, HeldJump>();
+    mine.set(id, { cover, settled: null });
+    jumps.set(boxId, mine);
+    return id;
   };
   return {
-    begin(boxId, pane) {
-      const id = ++nextJump;
-      const mine = jumps.get(boxId) ?? new Map<number, HeldJump>();
-      mine.set(id, { pane, settled: null });
-      jumps.set(boxId, mine);
-      return id;
-    },
+    begin: (boxId, pane) => add(boxId, { pane }),
+    beginWindow: (boxId, session, windowId) => add(boxId, { session, windowId }),
     settle(boxId, jump, ok, nowMs) {
       const j = jumps.get(boxId)?.get(jump);
       if (j && !j.settled) j.settled = { clock, ok, at: nowMs };
+    },
+    cancel(boxId, jump) {
+      const mine = jumps.get(boxId);
+      if (!mine) return;
+      mine.delete(jump);
+      if (!mine.size) jumps.delete(boxId);
     },
     fetchStarted: () => ++clock,
     applied(boxId, tick, agentsOf, nowMs) {

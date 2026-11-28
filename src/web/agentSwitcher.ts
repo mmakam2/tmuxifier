@@ -34,6 +34,7 @@ import { CHORD_IDLE, chordReduce, type ChordEffect, type ChordInput, type ChordS
 import { initialIndex, stepIndex, type SwitcherRow } from './agentSwitcherList';
 import { createPreviewScheduler, type PreviewTarget } from './agentSwitcherPreview';
 import { AGENT_LABEL, agentChipText, fmtAge } from './agentState';
+import { paintAgentName } from './dom';
 import type { Combo } from './hotkeys';
 
 export interface AgentSwitcherDeps {
@@ -116,7 +117,7 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     el.classList.toggle('gone', r.gone);
     // The pane's place can move while the overlay is open (a moved pane keeps its id).
     el.dataset.session = r.session;
-    (el.querySelector('.agent-switcher-session') as HTMLElement).textContent = r.name;
+    paintAgentName(el.querySelector('.agent-switcher-session') as HTMLElement, r.name, r.suffix);
     const chip = el.querySelector('.agent-switcher-chip') as HTMLElement;
     chip.className = `agent-switcher-chip chip-agent-${r.state}`;
     chip.textContent = agentChipText(r.state, r.cause);
@@ -171,7 +172,7 @@ export function createAgentSwitcher(deps: AgentSwitcherDeps): { isOpen(): boolea
     previewHead.hidden = !r;
     if (r) {
       (previewHead.querySelector('.agent-switcher-preview-box') as HTMLElement).textContent = r.label;
-      (previewHead.querySelector('.agent-switcher-preview-session') as HTMLElement).textContent = r.name;
+      paintAgentName(previewHead.querySelector('.agent-switcher-preview-session') as HTMLElement, r.name, r.suffix);
       const chip = previewHead.querySelector('.agent-switcher-chip') as HTMLElement;
       chip.className = `agent-switcher-chip chip-agent-${r.state}`;
       chip.textContent = agentChipText(r.state, r.cause);
