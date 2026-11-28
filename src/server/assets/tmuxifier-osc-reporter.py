@@ -2,12 +2,14 @@
 # Tmuxifier OSC 7501 pane reporter (installed by box setup; safe to delete — the
 # next setup run reinstalls it). Turns OSC 7501 "Program Status" sequences in
 # tmux pane output into the agent-state markers the Tmuxifier status probe reads:
-# ~/.tmuxifier-agent/<session>, one line <session>:<state>:<epoch>:<cause>.
+# ~/.tmuxifier-agent/<session><%pane>, one line
+# <session>:<state>:<epoch>:<cause>:%<pane> (the Claude hook's per-pane format;
+# the file name is the session with every byte outside A-Za-z0-9._- as `_`).
 # Interpolates nothing from the server; stdlib only.
 #
 # Roles (argv[1]):
 #   listen %N   a `tmux pipe-pane` reader for one pane: parses OSC 7501 from the
-#               pane's raw bytes, folds the records, writes the session marker.
+#               pane's raw bytes, folds the records, writes the pane's marker.
 #   loop        one resident process per box: attaches/detaches listeners by
 #               pane_current_command every 2 s.
 #   attach %N   what the `agy` shell function setup adds runs for its own pane
@@ -20,7 +22,7 @@
 #   sweep       what the status probe runs each poll: one attach pass, and keeps
 #               a loop of the current asset version alive.
 # This file's pure core (extract, parse_report, Records, next_action,
-# session_fold, PaneReader) is importable with no side effects; the roles live
+# PaneReader) is importable with no side effects; the roles live
 # in main(). The registry entry shared by loop and listener, and the version
 # handover that moves a pane from one listener to the next without losing the
 # fold, are specified in the "handover protocol" block above run_listen; the
@@ -197,19 +199,8 @@ class Records:
         return out
 
 
-def session_fold(folds):
-    """Blocked (first blocked's kind) > working > idle across pane folds."""
-    for state, kind in folds:
-        if state == 'blocked':
-            return ('blocked', kind)
-    for state, _ in folds:
-        if state == 'working':
-            return ('working', None)
-    return ('idle', None)
-
-
 def next_action(marker, new):
-    """Spec 5.3 table. marker = (state, cause) of the session's current marker
+    """Spec 5.3 table. marker = (state, cause) of the pane's current marker
     file or None; the marker is the only memory. Returns ('write', state, cause)
     or None. Removal (bare clear, EOF) is the caller's decision."""
     cur = marker[0] if marker else None
@@ -298,8 +289,35 @@ def resolve_session(pane_id):
         return None
 
 
-def marker_path(home, session):
-    return os.path.join(home, '.tmuxifier-agent', re.sub(r'[^A-Za-z0-9._-]', '_', session))
+def _safe_session(session):
+    """The session name as the Claude hook names its file: every BYTE outside
+    A-Za-z0-9._- becomes `_` (its `tr -c 'A-Za-z0-9._-' '_'`), so a non-ASCII
+    character is one `_` per UTF-8 byte."""
+    return re.sub(rb'[^A-Za-z0-9._-]', b'_', session.encode('utf-8', 'surrogateescape')).decode('ascii')
+
+
+def marker_path(home, session, pane_id):
+    """The pane's own marker file: ~/.tmuxifier-agent/<safe session><%pane>."""
+    return os.path.join(home, '.tmuxifier-agent', _safe_session(session) + pane_id)
+
+
+def legacy_marker_path(home, session):
+    """An older listener's session-wide file. Used only to find that file."""
+    return os.path.join(home, '.tmuxifier-agent', _safe_session(session))
+
+
+def own_marker_path(home, pane_id, last_written):
+    """The file a lastWritten line was written to: this pane's five-field line
+    names its own file, a four-field line an older listener's session-wide
+    file; anything else (another pane's line, junk) names nothing."""
+    if not isinstance(last_written, str):
+        return None
+    parts = last_written.rstrip('\n').split(':')
+    if len(parts) == 5 and parts[4] == pane_id:
+        return marker_path(home, parts[0], pane_id)
+    if len(parts) == 4:
+        return legacy_marker_path(home, parts[0])
+    return None
 
 
 def read_marker(path):
@@ -319,9 +337,9 @@ def read_marker_state(path):
     return m[0] if m else None
 
 
-def write_marker(path, session, state, cause):
-    """Write the hook's marker format byte for byte; returns the content."""
-    content = '%s:%s:%d:%s\n' % (session, state, int(time.time()), cause)
+def write_marker(path, session, state, cause, pane_id, ts=None):
+    """Write the hook's per-pane marker format byte for byte; returns the content."""
+    content = '%s:%s:%d:%s:%s\n' % (session, state, ts or int(time.time()), cause, pane_id)
     _atomic_write(path, content, 0o644)
     return content
 
@@ -347,48 +365,17 @@ def pid_alive(pid):
     return True
 
 
-def live_entries(home, session, exclude_pane):
-    """Registry entries of other panes in `session` whose listener is alive
-    (or being handed over / just attached: unclaimed but inside the grace)."""
-    d = os.path.join(home, '.tmuxifier-osc', 'panes')
-    out = []
+def _bare_clear(home, pane_id, last_written):
+    """Remove the file last_written names if it still holds exactly what this
+    listener wrote; returns the new lastWritten (None once removed)."""
+    path = own_marker_path(home, pane_id, last_written)
+    if path is None or _read_text(path) != last_written:
+        return last_written  # not ours (or nothing written): leave it alone
     try:
-        names = os.listdir(d)
-    except Exception:
-        return out
-    skip = exclude_pane.lstrip('%')
-    for n in names:
-        if n == skip or not n.isdigit():
-            continue
-        e = read_entry(os.path.join(d, n))
-        if e.get('session') != session or not entry_live(e):
-            continue  # a handed-over entry in grace still carries its pane's records
-        out.append(e)
-    return out
-
-
-def _sibling_folds(home, session, pane_id):
-    return [Records.from_json(e.get('records')).fold() for e in live_entries(home, session, pane_id)]
-
-
-def _bare_clear(home, pane_id, session, own_fold, last_written):
-    """The program exited. Returns the new lastWritten."""
-    if not session:
-        return last_written
-    mpath = marker_path(home, session)
-    sibs = _sibling_folds(home, session, pane_id)
-    if not sibs:
-        if last_written is not None and _read_text(mpath) == last_written:
-            try:
-                os.unlink(mpath)
-            except FileNotFoundError:
-                pass
-            return None
-        return last_written  # not ours: leave it alone
-    act = next_action(read_marker(mpath), session_fold([own_fold] + sibs))
-    if act:
-        return write_marker(mpath, session, act[1], act[2])
-    return last_written
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    return None
 
 
 # ------------------------------------------------------ handover protocol
@@ -473,14 +460,14 @@ def _bare_clear(home, pane_id, session, own_fold, last_written):
 # already `blocked` and never pushes "needs you" for that prompt. The Claude
 # hook has no such gap because SessionStart writes ready/start. So a FRESH
 # attach — the entry it seeds from has no records and no lastWritten — whose
-# session resolves and has NO marker file writes the first observation at
-# start-up through the normal fold path (idle folded with the live siblings:
-# ready/start, or the siblings' blocked/working). It sets lastWritten, so the
-# bare-clear and EOF ownership rules apply to it like any other write. A
-# marker file that exists (the hook's, a sibling's, a predecessor's) is never
-# touched, and a seeded start (handover, or a listener restarted on a pane
-# whose entry still holds records/lastWritten) never writes before its first
-# chunk. The replay harness models the chunk gate only, so its trail shows
+# session resolves and whose PANE has no marker file writes the first
+# observation at start-up: the seed is per pane and always ready/start. It
+# sets lastWritten, so the bare-clear and EOF ownership rules apply to it like
+# any other write. A marker file of the pane that exists (the hook's, a
+# predecessor's) is never touched; a session-wide file or another pane's file
+# is never looked at. A seeded start (handover, or a listener restarted on a
+# pane whose entry still holds records/lastWritten) never writes before its
+# first chunk. The replay harness models the chunk gate only, so its trail shows
 # ready/start at the agent's own idle report, not at attach.
 # --------------------------------------------------------------------------
 
@@ -561,18 +548,18 @@ def run_listen(pane_id, *, home, stdin_fd=0):
             debug(home, 'persist: %r' % (e,))
 
     # Attach seed (protocol block): a FRESH attach — no records and no
-    # lastWritten to seed from — whose session has no marker file yet writes
-    # the first observation itself, through the normal fold path.
+    # lastWritten to seed from — whose pane has no marker file yet writes the
+    # first observation itself (idle: always ready/start).
     if not entry.get('records') and last_written is None:
         try:
             s = resolve_session(pane_id)
             if s is not None:
                 session = s
-                mpath = marker_path(home, s)
+                mpath = marker_path(home, s, pane_id)
                 if not os.path.exists(mpath):
-                    act = next_action(None, session_fold([('idle', None)] + _sibling_folds(home, s, pane_id)))
+                    act = next_action(None, ('idle', None))
                     if act:
-                        last_written = write_marker(mpath, s, act[1], act[2])
+                        last_written = write_marker(mpath, s, act[1], act[2], pane_id)
         except Exception as e:
             debug(home, 'attach seed: %r' % (e,))
     persist()
@@ -592,9 +579,7 @@ def run_listen(pane_id, *, home, stdin_fd=0):
                 continue
             what, fold = got
             if what == 'clear':
-                s = resolve_session(pane_id) or session
-                last_written = _bare_clear(home, pane_id, s, fold, last_written)
-                session = s
+                last_written = _bare_clear(home, pane_id, last_written)
                 persist()
                 continue
             s = resolve_session(pane_id)
@@ -602,25 +587,29 @@ def run_listen(pane_id, *, home, stdin_fd=0):
                 persist()
                 continue
             session = s
-            new = session_fold([fold] + _sibling_folds(home, s, pane_id))
-            mpath = marker_path(home, s)
-            act = next_action(read_marker(mpath), new)
+            mpath = marker_path(home, s, pane_id)
+            if last_written is not None and own_marker_path(home, pane_id, last_written) != mpath:
+                # The pane is in another session now (or the line is an older
+                # version's): release the old file if it is still ours.
+                _bare_clear(home, pane_id, last_written)
+                last_written = None
+            act = next_action(read_marker(mpath), fold)
             if act:
-                last_written = write_marker(mpath, s, act[1], act[2])
+                last_written = write_marker(mpath, s, act[1], act[2], pane_id)
             persist()
         except Exception as e:
             debug(home, 'chunk: %r' % (e,))
 
     # EOF: the pane is gone, this listener was detached, or it was handed over.
+    # No tmux call: the file to release is the one lastWritten names.
     try:
-        s = resolve_session(pane_id) or session  # tmux call outside the lock
         with entries_locked(home):
             cur = read_entry(epath)
             # An absent entry is a real end: the loop already dropped it for a
             # gone/unpiped pane (it never deletes an entry during a handover).
             if cur and (cur.get('handover') is True or cur.get('pid') != os.getpid() or superseded(cur)):
                 return 0
-            _bare_clear(home, pane_id, s, ('idle', None), last_written)
+            _bare_clear(home, pane_id, last_written)
             _unlink(epath)
     except Exception as e:
         debug(home, 'eof: %r' % (e,))
@@ -834,14 +823,6 @@ def hand_over(pane_id, home, e):
 def _in_grace(e):
     at = e.get('attachedAt')
     return _is_num(at) and time.time() - at < ATTACH_GRACE_S
-
-
-def entry_live(e):
-    """A claimed entry with a live pid, or an unclaimed one still in grace."""
-    pid = e.get('pid')
-    if pid is None:
-        return _in_grace(e)
-    return pid_alive(pid)
 
 
 def _unlink(path):

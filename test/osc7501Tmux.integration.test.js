@@ -98,7 +98,8 @@ async function harness({ shell = false, locale = { LANG: 'C.UTF-8' } } = {}) {
   const tmux = (...args) => execFileSync(path.join(bin, 'tmux'), args, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const h = {
     tmp, home, bin, env, installed, tmux,
-    marker: path.join(home, '.tmuxifier-agent', 'web'),
+    marker: path.join(home, '.tmuxifier-agent', 'web%0'),
+    legacy: path.join(home, '.tmuxifier-agent', 'web'),
     entry: path.join(home, '.tmuxifier-osc', 'panes', '0'),
     lock: path.join(home, '.tmuxifier-osc', 'loop.lock'),
     sweep() {
@@ -116,6 +117,11 @@ async function harness({ shell = false, locale = { LANG: 'C.UTF-8' } } = {}) {
     report(body) {
       tmux('send-keys', '-t', 'web', '-l', `printf '\\033]7501;${body}\\007'`);
       tmux('send-keys', '-t', 'web', 'Enter');
+    },
+    // Typed into one pane by id; printf turns the octal escapes into ESC/BEL.
+    reportTo(paneId, body) {
+      tmux('send-keys', '-t', paneId, '-l', `printf '\\033]7501;${body}\\007'`);
+      tmux('send-keys', '-t', paneId, 'Enter');
     },
     fmt(f) { return tmux('display-message', '-p', '-t', '%0', f).trim(); },
     procs(role) {
@@ -154,7 +160,7 @@ test('a setup rerun hands the listener over live: marker kept, fold continues, o
   expect(readIf(h.lock)).toMatch(new RegExp(`^\\d+ ${sha1}\\n$`));
 
   h.report('state=working:app=codex');
-  const working = await waitFor(() => { const m = readIf(h.marker); return m && /^web:working:\d+:prompt\n$/.test(m) ? m : null; }, { what: 'working marker' });
+  const working = await waitFor(() => { const m = readIf(h.marker); return m && /^web:working:\d+:prompt:%0\n$/.test(m) ? m : null; }, { what: 'working marker' });
 
   // Setup rerun: the installed asset changes (one appended comment line), the
   // next probe sweep notices the loop's recorded sha differs and replaces it;
@@ -186,7 +192,7 @@ test('a setup rerun hands the listener over live: marker kept, fold continues, o
   // The fold continues from the seeded state: idle after working is a finished
   // turn (ready:stop), not a cold first observation (ready:start).
   h.report('state=idle:app=codex');
-  await waitFor(() => /^web:ready:\d+:stop\n$/.test(readIf(h.marker) || ''), { what: 'ready:stop marker' });
+  await waitFor(() => /^web:ready:\d+:stop:%0\n$/.test(readIf(h.marker) || ''), { what: 'ready:stop marker' });
 
   // Bare clear from the program: the marker is ours, so it is removed.
   h.report('state=clear');
@@ -215,17 +221,17 @@ test('list_panes splits a real listing under LC_ALL=C outside tmux (tmux -u keep
 test('a probe-only chunk is not an observation: a foreign working marker survives it and the listener exit', async () => {
   const h = await harness();
   mkdirSync(path.dirname(h.marker), { recursive: true });
-  writeFileSync(h.marker, 'web:working:1:prompt\n'); // e.g. the Claude hook's
+  writeFileSync(h.marker, 'web:working:1:prompt:%0\n'); // e.g. the Claude hook's
   h.sweep();
   await waitFor(() => { const e = h.readEntry(); return e && typeof e.pid === 'number'; }, { what: 'listener claim' });
   h.report('?');
   await sleep(700);
-  expect(readIf(h.marker)).toBe('web:working:1:prompt\n');
+  expect(readIf(h.marker)).toBe('web:working:1:prompt:%0\n');
   // The agent exits (the pane closes with it): EOF without handover.
   h.tmux('send-keys', '-t', 'web', '-l', 'exit');
   h.tmux('send-keys', '-t', 'web', 'Enter');
   await waitFor(() => h.procs('listen %0').length === 0, { what: 'listener exit' });
-  expect(readIf(h.marker)).toBe('web:working:1:prompt\n');
+  expect(readIf(h.marker)).toBe('web:working:1:prompt:%0\n');
 });
 
 test('pre-attach catches a report sent the moment the agent starts', async () => {
@@ -234,7 +240,7 @@ test('pre-attach catches a report sent the moment the agent starts', async () =>
   writeFileSync(payload, "printf '\\033]7501;state=blocked:kind=permission:app=antigravity\\007'; sleep 30; true\n");
   h.tmux('send-keys', '-t', 'web', '-l', `python3 "$HOME/.tmuxifier-osc/reporter.py" attach "$TMUX_PANE"; agy --norc --noprofile ${payload}`);
   h.tmux('send-keys', '-t', 'web', 'Enter');
-  await waitFor(() => /^web:blocked:\d+:permission\n$/.test(readIf(h.marker) || ''), { what: 'blocked marker' });
+  await waitFor(() => /^web:blocked:\d+:permission:%0\n$/.test(readIf(h.marker) || ''), { what: 'blocked marker' });
   expect(h.fmt('#{pane_current_command}')).toBe('agy');
   expect(h.fmt('#{pane_pipe}')).toBe('1');
   const e = await waitFor(() => { const x = h.readEntry(); return x && typeof x.pid === 'number' ? x : null; }, { what: 'listener pid' });
@@ -251,7 +257,7 @@ test('the installed agy function pre-attaches', async () => {
   h.tmux('send-keys', '-t', 'web', 'Enter');
   h.tmux('send-keys', '-t', 'web', '-l', `agy --norc --noprofile ${payload}`);
   h.tmux('send-keys', '-t', 'web', 'Enter');
-  await waitFor(() => /^web:blocked:\d+:permission\n$/.test(readIf(h.marker) || ''), { what: 'blocked marker' });
+  await waitFor(() => /^web:blocked:\d+:permission:%0\n$/.test(readIf(h.marker) || ''), { what: 'blocked marker' });
   expect(h.fmt('#{pane_current_command}')).toBe('agy');
   const e = await waitFor(() => { const x = h.readEntry(); return x && typeof x.pid === 'number' ? x : null; }, { what: 'listener pid' });
   expect(alive(e.pid)).toBe(true);
@@ -262,7 +268,7 @@ test('an agent that never starts: the loop the role started detaches the listene
   const h = await harness({ shell: true });
   h.attachRole('%0', h.fmt('#{socket_path}') + ',1,0');
   await waitFor(() => { const e = h.readEntry(); return e && typeof e.pid === 'number'; }, { what: 'listener claim' });
-  await waitFor(() => /^web:ready:\d+:start\n$/.test(readIf(h.marker) || ''), { what: 'seeded ready/start' });
+  await waitFor(() => /^web:ready:\d+:start:%0\n$/.test(readIf(h.marker) || ''), { what: 'seeded ready/start' });
   await waitFor(() => h.fmt('#{pane_pipe}') === '0' && !existsSync(h.marker) && !existsSync(h.entry)
     && h.procs('listen %0').length === 0, { ms: 20000, what: 'listener detached, marker and entry gone' });
 }, 30000);
@@ -297,4 +303,30 @@ test('a pane of another tmux server is refused', async () => {
   } finally {
     try { run('kill-server'); } catch {}
   }
+});
+
+test('three codex panes of one session, one split and one in a background window, each keep their own marker', async () => {
+  const h = await harness();
+  const codex = path.join(h.bin, 'codex');
+  // The private server holds only the session `web`, so the bare name is exact here.
+  const split = h.tmux('split-window', '-d', '-t', '%0', '-P', '-F', '#{pane_id}', `exec '${codex}'`).trim();
+  const bg = h.tmux('new-window', '-d', '-t', 'web:', '-P', '-F', '#{pane_id}', `exec '${codex}'`).trim();
+  expect([split, bg]).toEqual(['%1', '%2']);
+  const cmdOf = (id) => h.tmux('display-message', '-p', '-t', id, '#{pane_current_command}').trim();
+  await waitFor(() => cmdOf(split) === 'codex' && cmdOf(bg) === 'codex', { what: 'three codex panes' });
+  const markerOf = (id) => path.join(h.home, '.tmuxifier-agent', `web${id}`);
+  const reads = (id, re) => re.test(readIf(markerOf(id)) || '');
+
+  h.sweep();
+  await waitFor(() => ['%0', '%1', '%2'].every((id) => reads(id, new RegExp(`^web:ready:\\d+:start:${id}\\n$`))), { what: 'one seeded marker per pane' });
+  h.reportTo('%0', 'state=working:app=codex');
+  h.reportTo(split, 'state=blocked:kind=question:app=codex');
+  await waitFor(() => reads('%0', /^web:working:\d+:prompt:%0\n$/) && reads('%1', /^web:blocked:\d+:question:%1\n$/), { what: 'two independent states' });
+  expect(reads('%2', /^web:ready:\d+:start:%2\n$/)).toBe(true); // the background window's pane is untouched
+
+  h.reportTo(split, 'state=clear');
+  await waitFor(() => !existsSync(markerOf('%1')), { what: 'the cleared pane\'s marker removal' });
+  expect(reads('%0', /^web:working:\d+:prompt:%0\n$/)).toBe(true);
+  expect(reads('%2', /^web:ready:\d+:start:%2\n$/)).toBe(true);
+  expect(existsSync(h.legacy)).toBe(false); // nothing writes a session-wide file any more
 });

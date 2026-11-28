@@ -7,15 +7,15 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HELPER = path.join(HERE, 'helpers', 'osc7501Replay.py');
 const FIXTURE = path.join(HERE, 'fixtures', 'osc7501-pane-trace.jsonl');
 
-// Replays the real recording; returns { rows: [{line, session, marker}], lines }.
+// Replays the real recording; returns { rows: [{line, pane, session, marker}], lines }.
 function replay(mapping = []) {
   const out = execFileSync('python3', [HELPER, 'fixture', FIXTURE, ...mapping], { encoding: 'utf8' });
   const objs = out.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
   const last = objs.pop();
   return { rows: objs, lines: last.lines };
 }
-const trailOf = (rows, session) =>
-  rows.filter((r) => r.session === session).map((r) => [r.line, r.marker]);
+const trailOf = (rows, pane) =>
+  rows.filter((r) => r.pane === pane).map((r) => [r.line, r.marker]);
 
 const OPENCODE = [[41, 'ready/start'], [43, 'working/prompt'], [64, 'blocked/permission'], [806, null]];
 const OPENCODE2 = [
@@ -49,9 +49,11 @@ describe('osc7501 acceptance replay over the recorded pane trace', () => {
     expect(rows.length).toBe(OPENCODE.length + 1 + OPENCODE2.length + AGY.length + AGYAUTH.length);
   });
 
-  it('folds two panes into one session', () => {
+  it('two panes of one session keep their own trails', () => {
     const { rows, lines } = replay(['opencode=shared', 'opencode2=shared']);
     expect(lines).toBe(LINES);
-    expect(trailOf(rows, 'shared')).toEqual([...OPENCODE, ...OPENCODE2]);
+    expect(trailOf(rows, 'opencode')).toEqual(OPENCODE);
+    expect(trailOf(rows, 'opencode2')).toEqual(OPENCODE2);
+    expect(rows.filter((r) => r.pane === 'opencode' || r.pane === 'opencode2').every((r) => r.session === 'shared')).toBe(true);
   });
 });

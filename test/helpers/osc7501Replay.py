@@ -3,8 +3,8 @@
 # asset by path; markers live in a dict instead of files.
 #   osc7501Replay.py fixture <jsonl> [pane=session ...]
 #   osc7501Replay.py chunks [--marker state/cause]     (base64 lines on stdin)
-# Prints {"line": n, "session": s, "marker": "state/cause" | null} whenever a
-# session's marker changes; fixture mode ends with {"lines": <count>}.
+# Prints {"line": n, "pane": p, "session": s, "marker": "state/cause" | null}
+# whenever a pane's marker changes; fixture mode ends with {"lines": <count>}.
 import base64
 import importlib.util
 import json
@@ -23,52 +23,33 @@ spec.loader.exec_module(rep)
 class Replay:
     def __init__(self, session_of, markers=None):
         self.session_of = session_of
-        self.markers = dict(markers or {})   # session -> (state, cause)
-        self.written = {}                    # session -> (state, cause) this reporter last wrote
-        self.panes = {}                      # pane -> {'reader','active'}
-
-    def _pane(self, name):
-        return self.panes.setdefault(name, {'reader': rep.PaneReader(), 'active': False})
+        self.markers = dict(markers or {})   # pane -> (state, cause)
+        self.written = {}                    # pane -> (state, cause) this reporter last wrote
+        self.readers = {}                    # pane -> PaneReader
 
     def feed(self, line, pane, data):
         """One pipe chunk through the asset's own chunk gate (PaneReader), so
         the harness folds exactly as run_listen does: every report in the
-        chunk, one fold, and a probe-only chunk is not an observation."""
-        p = self._pane(pane)
-        got = p['reader'].feed(data)
+        chunk, one fold, and a probe-only chunk is not an observation. Each
+        pane has its own marker, as each listener does."""
+        reader = self.readers.setdefault(pane, rep.PaneReader())
+        got = reader.feed(data)
         if got is None:
             return []
-        what, _fold = got
-        session = self.session_of(pane)
+        what, fold = got
+        row = {'line': line, 'pane': pane, 'session': self.session_of(pane)}
         if what == 'clear':
-            p['active'] = False
-            return self._after_clear(line, session)
-        p['active'] = True
-        return self._evaluate(line, session)
-
-    def _session_fold(self, session):
-        folds = [q['reader'].recs.fold() for name, q in self.panes.items()
-                 if q['active'] and self.session_of(name) == session]
-        return rep.session_fold(folds), bool(folds)
-
-    def _evaluate(self, line, session):
-        fold, _ = self._session_fold(session)
-        act = rep.next_action(self.markers.get(session), fold)
+            if pane in self.markers and self.markers[pane] == self.written.get(pane):
+                del self.markers[pane]
+                del self.written[pane]
+                return [dict(row, marker=None)]
+            return []
+        act = rep.next_action(self.markers.get(pane), fold)
         if act is None:
             return []
-        self.markers[session] = (act[1], act[2])
-        self.written[session] = (act[1], act[2])
-        return [{'line': line, 'session': session, 'marker': '%s/%s' % (act[1], act[2])}]
-
-    def _after_clear(self, line, session):
-        _, any_active = self._session_fold(session)
-        if any_active:
-            return self._evaluate(line, session)
-        if session in self.markers and self.markers[session] == self.written.get(session):
-            del self.markers[session]
-            del self.written[session]
-            return [{'line': line, 'session': session, 'marker': None}]
-        return []
+        self.markers[pane] = (act[1], act[2])
+        self.written[pane] = (act[1], act[2])
+        return [dict(row, marker='%s/%s' % (act[1], act[2]))]
 
 
 def emit(rows):
@@ -82,7 +63,7 @@ def main(argv):
         markers = {}
         if '--marker' in argv:
             st, cause = argv[argv.index('--marker') + 1].split('/')
-            markers['s'] = (st, cause)
+            markers['p'] = (st, cause)
         rp = Replay(lambda pane: 's', markers)
         for n, raw in enumerate(sys.stdin, 1):
             raw = raw.strip()

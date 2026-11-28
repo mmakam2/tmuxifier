@@ -18,21 +18,25 @@ afterEach(async () => {
   for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-function setup({ sessions = { 5: 'web' } } = {}) {
+// `before` runs before the listener starts: what it writes is there for the
+// listener's start-up (the attach seed), with no race against the spawn.
+function setup({ sessions = { 5: 'web' }, before } = {}) {
   const home = mkdtempSync(path.join(tmpdir(), 'osc-listen-'));
   tmps.push(home);
   const stubDir = path.join(home, 'bin');
   mkdirSync(stubDir);
   const stub = makeStubTmux(stubDir, { sessionOf: sessions });
+  const markerOf = (s, pane = '%5') => path.join(home, '.tmuxifier-agent', `${s}${pane}`);
+  const legacyOf = (s) => path.join(home, '.tmuxifier-agent', s);
+  const entryFile = path.join(home, '.tmuxifier-osc', 'panes', '5');
+  if (before) before({ home, markerOf, legacyOf, entryFile });
   const child = spawn('python3', [ASSET, 'listen', '%5'], {
     env: { HOME: home, PATH: `${stubDir}:${process.env.PATH}`, ...stub.env },
     stdio: ['pipe', 'ignore', 'ignore'],
   });
   kids.push(child);
   const exited = new Promise((r) => child.once('exit', (code) => r(code)));
-  const markerOf = (s) => path.join(home, '.tmuxifier-agent', s);
-  const entryFile = path.join(home, '.tmuxifier-osc', 'panes', '5');
-  return { home, stub, child, exited, markerOf, entryFile, send: (b) => child.stdin.write(b) };
+  return { home, stub, child, exited, markerOf, legacyOf, entryFile, send: (b) => child.stdin.write(b) };
 }
 
 async function waitFor(fn, ms = 2000) {
@@ -51,7 +55,7 @@ const waitMarker = (t, session, re) => waitFor(() => { const c = readIf(t.marker
 test('working then idle write the marker, EOF removes marker and entry', async () => {
   const t = setup();
   t.send(osc('state=working'));
-  const c = await waitMarker(t, 'web', /^web:working:\d+:prompt\n$/);
+  const c = await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
   expect(statSync(t.markerOf('web')).mode & 0o777).toBe(0o644);
   const entry = JSON.parse(readFileSync(t.entryFile, 'utf8'));
   expect(entry.pid).toBe(t.child.pid);
@@ -59,7 +63,7 @@ test('working then idle write the marker, EOF removes marker and entry', async (
   expect(entry.lastWritten).toBe(c);
   expect(Object.keys(entry).sort()).toEqual(['attachedAt', 'handover', 'lastWritten', 'pid', 'records', 'session', 'sha']);
   t.send(osc('state=idle'));
-  await waitMarker(t, 'web', /^web:ready:\d+:stop\n$/);
+  await waitMarker(t, 'web', /^web:ready:\d+:stop:%5\n$/);
   t.child.stdin.end();
   expect(await t.exited).toBe(0);
   expect(existsSync(t.markerOf('web'))).toBe(false);
@@ -70,10 +74,10 @@ test('EOF keeps a marker someone else rewrote', async () => {
   const t = setup();
   t.send(osc('state=working'));
   await waitMarker(t, 'web', /:working:/);
-  writeFileSync(t.markerOf('web'), 'web:working:1:prompt\n');
+  writeFileSync(t.markerOf('web'), 'web:working:1:prompt:%5\n');
   t.child.stdin.end();
   expect(await t.exited).toBe(0);
-  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt:%5\n');
   expect(existsSync(t.entryFile)).toBe(false);
 });
 
@@ -81,13 +85,13 @@ test('handover seeds records and keeps marker and entry on EOF', async () => {
   const t = setup();
   mkdirSync(path.dirname(t.entryFile), { recursive: true });
   mkdirSync(path.dirname(t.markerOf('web')), { recursive: true });
-  writeFileSync(t.markerOf('web'), 'web:working:1:prompt\n');
+  writeFileSync(t.markerOf('web'), 'web:working:1:prompt:%5\n');
   writeFileSync(t.entryFile, JSON.stringify({
     pid: 1, sha: 'x', session: 'web', records: { '': { state: 'working', kind: null } },
-    lastWritten: 'web:working:1:prompt\n', handover: true, attachedAt: 1,
+    lastWritten: 'web:working:1:prompt:%5\n', handover: true, attachedAt: 1,
   }));
   t.send(osc('state=idle'));
-  await waitMarker(t, 'web', /^web:ready:\d+:stop\n$/);
+  await waitMarker(t, 'web', /^web:ready:\d+:stop:%5\n$/);
   const cur = JSON.parse(readFileSync(t.entryFile, 'utf8'));
   expect(cur.pid).toBe(t.child.pid);
   expect(cur.handover).toBe(false);
@@ -99,31 +103,50 @@ test('handover seeds records and keeps marker and entry on EOF', async () => {
   expect(after.pid).toBe(t.child.pid);
 });
 
-test('sibling pane keeps the session blocked', async () => {
-  const t = setup();
-  mkdirSync(path.dirname(t.entryFile), { recursive: true });
-  writeFileSync(path.join(path.dirname(t.entryFile), '7'), JSON.stringify({
-    pid: process.pid, sha: 'x', session: 'web', records: { '': { state: 'blocked', kind: 'permission' } },
-    lastWritten: null, handover: false, attachedAt: 1,
-  }));
+test('a sibling pane is not folded in: each pane has its own marker', async () => {
+  const SIB = 'web:blocked:1:permission:%7\n';
+  const t = setup({ before: (p) => {
+    mkdirSync(path.dirname(p.entryFile), { recursive: true });
+    mkdirSync(path.dirname(p.markerOf('web')), { recursive: true });
+    writeFileSync(path.join(path.dirname(p.entryFile), '7'), JSON.stringify({
+      pid: process.pid, sha: 'x', session: 'web', records: { '': { state: 'blocked', kind: 'permission' } },
+      lastWritten: SIB, handover: false, attachedAt: 1,
+    }));
+    writeFileSync(p.markerOf('web', '%7'), SIB);
+  } });
   t.send(osc('state=working'));
-  await waitMarker(t, 'web', /^web:blocked:\d+:permission\n$/);
-  t.send(osc('state=idle'));
-  await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).records['']?.state === 'idle');
-  await new Promise((r) => setTimeout(r, 100));
-  expect(readFileSync(t.markerOf('web'), 'utf8')).toMatch(/^web:blocked:\d+:permission\n$/);
+  await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
+  t.send(osc('state=clear'));
+  await waitFor(() => !existsSync(t.markerOf('web')));
+  expect(readFileSync(t.markerOf('web', '%7'), 'utf8')).toBe(SIB);
+  expect(existsSync(t.legacyOf('web'))).toBe(false);
   t.child.stdin.end();
   await t.exited;
 });
 
-test('a renamed session gets its own marker', async () => {
+test('a pane whose session changed: the marker moves to the new name and the old file is removed', async () => {
   const t = setup();
   t.send(osc('state=working'));
   await waitMarker(t, 'web', /:working:/);
   t.stub.setSessions({ 5: 'web2' });
   t.send(osc('state=idle'));
-  await waitMarker(t, 'web2', /^web2:ready:\d+:start\n$/);
-  expect(readFileSync(t.markerOf('web'), 'utf8')).toMatch(/:working:/);
+  const c = await waitMarker(t, 'web2', /^web2:ready:\d+:start:%5\n$/);
+  expect(existsSync(t.markerOf('web'))).toBe(false);
+  await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).lastWritten === c);
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(existsSync(t.markerOf('web2'))).toBe(false); // EOF removes the file lastWritten names
+});
+
+test('a pane whose session changed leaves an old file someone else rewrote', async () => {
+  const t = setup();
+  t.send(osc('state=working'));
+  await waitMarker(t, 'web', /:working:/);
+  writeFileSync(t.markerOf('web'), 'web:blocked:1:permission:%5\n');
+  t.stub.setSessions({ 5: 'web2' });
+  t.send(osc('state=idle'));
+  await waitMarker(t, 'web2', /^web2:ready:\d+:start:%5\n$/);
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:blocked:1:permission:%5\n');
   t.child.stdin.end();
   await t.exited;
 });
@@ -133,7 +156,7 @@ test('a junk entry is tolerated; first idle is ready/start', async () => {
   mkdirSync(path.dirname(t.entryFile), { recursive: true });
   writeFileSync(t.entryFile, 'not json');
   t.send(osc('state=idle'));
-  await waitMarker(t, 'web', /^web:ready:\d+:start\n$/);
+  await waitMarker(t, 'web', /^web:ready:\d+:start:%5\n$/);
   t.child.stdin.end();
   expect(await t.exited).toBe(0);
 });
@@ -141,7 +164,7 @@ test('a junk entry is tolerated; first idle is ready/start', async () => {
 test('a session name with a space is sanitized in the filename only', async () => {
   const t = setup({ sessions: { 5: 'my proj' } });
   t.send(osc('state=working'));
-  await waitMarker(t, 'my_proj', /^my proj:working:\d+:prompt\n$/);
+  await waitMarker(t, 'my_proj', /^my proj:working:\d+:prompt:%5\n$/);
   t.child.stdin.end();
   await t.exited;
 });
@@ -153,7 +176,7 @@ test('a bare clear removes the marker this reporter wrote, and the next idle is 
   t.send(osc('state=clear'));
   await waitFor(() => !existsSync(t.markerOf('web')));
   t.send(osc('state=idle'));
-  await waitMarker(t, 'web', /^web:ready:\d+:start\n$/);
+  await waitMarker(t, 'web', /^web:ready:\d+:start:%5\n$/);
   t.child.stdin.end();
   await t.exited;
 });
@@ -161,7 +184,7 @@ test('a bare clear removes the marker this reporter wrote, and the next idle is 
 test('a successor that owns the entry is not overwritten by the handed-over listener at EOF', async () => {
   const t = setup();
   t.send(osc('state=working'));
-  await waitMarker(t, 'web', /^web:working:\d+:prompt\n$/);
+  await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
   const successor = JSON.stringify({
     pid: t.child.pid + 100000, sha: 'new', session: 'web', records: {}, lastWritten: null, handover: true, attachedAt: 2,
   });
@@ -175,21 +198,21 @@ test('a successor that owns the entry is not overwritten by the handed-over list
 test('a probe-only chunk is not an observation: a foreign working marker is untouched and survives EOF', async () => {
   const t = setup();
   mkdirSync(path.dirname(t.markerOf('web')), { recursive: true });
-  writeFileSync(t.markerOf('web'), 'web:working:1:prompt\n'); // the Claude hook's
+  writeFileSync(t.markerOf('web'), 'web:working:1:prompt:%5\n'); // the Claude hook's
   t.send(osc('?'));
   await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).pid === t.child.pid);
   await new Promise((r) => setTimeout(r, 300));
-  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt:%5\n');
   t.child.stdin.end();
   expect(await t.exited).toBe(0);
-  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt:%5\n');
   expect(existsSync(t.entryFile)).toBe(false);
 });
 
 test('a listener the loop restamped (handover in flight) touches neither marker nor entry at EOF', async () => {
   const t = setup();
   t.send(osc('state=working'));
-  await waitMarker(t, 'web', /^web:working:\d+:prompt\n$/);
+  await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
   // The loop's pre-attach write: pid stripped, attachedAt restamped, handover set.
   const cur = JSON.parse(readFileSync(t.entryFile, 'utf8'));
   const restamped = JSON.stringify({ ...cur, pid: undefined, attachedAt: cur.attachedAt + 1, handover: true });
@@ -203,7 +226,7 @@ test('a listener the loop restamped (handover in flight) touches neither marker 
 test('the loop dropped the entry for a gone pane before EOF: the listener still removes its own marker', async () => {
   const t = setup();
   t.send(osc('state=working'));
-  await waitMarker(t, 'web', /^web:working:\d+:prompt\n$/);
+  await waitMarker(t, 'web', /^web:working:\d+:prompt:%5\n$/);
   rmSync(t.entryFile); // pass_once: pane gone / pipe gone, concurrent with the pane's death
   t.child.stdin.end();
   expect(await t.exited).toBe(0);
@@ -212,7 +235,7 @@ test('the loop dropped the entry for a gone pane before EOF: the listener still 
 
 test('attach seed: a fresh listener on a session with no marker writes ready/start before any chunk', async () => {
   const t = setup();
-  const c = await waitMarker(t, 'web', /^web:ready:\d+:start\n$/);
+  const c = await waitMarker(t, 'web', /^web:ready:\d+:start:%5\n$/);
   const entry = await waitFor(() => { const e = JSON.parse(readFileSync(t.entryFile, 'utf8')); return e.lastWritten === c ? e : null; });
   expect(entry.pid).toBe(t.child.pid);
   expect(entry.session).toBe('web');
@@ -227,10 +250,10 @@ test('attach seed: a fresh listener on a session with no marker writes ready/sta
 test('attach seed: an existing marker (the hook\'s) is untouched before any chunk', async () => {
   const t = setup();
   mkdirSync(path.dirname(t.markerOf('web')), { recursive: true });
-  writeFileSync(t.markerOf('web'), 'web:working:1:prompt\n');
+  writeFileSync(t.markerOf('web'), 'web:working:1:prompt:%5\n');
   await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).pid === t.child.pid);
   await new Promise((r) => setTimeout(r, 300));
-  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+  expect(readFileSync(t.markerOf('web'), 'utf8')).toBe('web:working:1:prompt:%5\n');
   expect(JSON.parse(readFileSync(t.entryFile, 'utf8')).lastWritten).toBe(null);
   t.child.stdin.end();
   await t.exited;
@@ -241,11 +264,34 @@ test('attach seed: a seeded start (entry with records/lastWritten) writes nothin
   mkdirSync(path.dirname(t.entryFile), { recursive: true });
   writeFileSync(t.entryFile, JSON.stringify({
     sha: 'x', session: 'web', records: { '': { state: 'idle', kind: null } },
-    lastWritten: 'web:ready:1:start\n', handover: true, attachedAt: 1,
+    lastWritten: 'web:ready:1:start:%5\n', handover: true, attachedAt: 1,
   }));
   await waitFor(() => JSON.parse(readFileSync(t.entryFile, 'utf8')).pid === t.child.pid);
   await new Promise((r) => setTimeout(r, 300));
   expect(existsSync(t.markerOf('web'))).toBe(false);
+  t.child.stdin.end();
+  await t.exited;
+});
+
+test('attach seed is per pane: a session-wide file and a sibling pane\'s file do not stop it and are not touched', async () => {
+  const t = setup({ before: (p) => {
+    mkdirSync(path.dirname(p.markerOf('web')), { recursive: true });
+    writeFileSync(p.legacyOf('web'), 'web:working:1:prompt\n');
+    writeFileSync(p.markerOf('web', '%7'), 'web:blocked:1:permission:%7\n');
+  } });
+  await waitMarker(t, 'web', /^web:ready:\d+:start:%5\n$/);
+  expect(readFileSync(t.legacyOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+  expect(readFileSync(t.markerOf('web', '%7'), 'utf8')).toBe('web:blocked:1:permission:%7\n');
+  t.child.stdin.end();
+  expect(await t.exited).toBe(0);
+  expect(existsSync(t.markerOf('web'))).toBe(false);
+  expect(readFileSync(t.legacyOf('web'), 'utf8')).toBe('web:working:1:prompt\n');
+});
+
+test('a non-ASCII session name is sanitised byte for byte, like the hook', async () => {
+  const t = setup({ sessions: { 5: 'café' } });
+  t.send(osc('state=working'));
+  await waitMarker(t, 'caf__', /^café:working:\d+:prompt:%5\n$/);
   t.child.stdin.end();
   await t.exited;
 });

@@ -5,6 +5,14 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'helpers', 'osc7501Replay.py');
+const ASSET = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'server', 'assets', 'tmuxifier-osc-reporter.py');
+// Evaluates one Python expression against the real asset (imported as `m`); returns its JSON.
+function py(expr) {
+  const script = 'import importlib.util,json,sys\nsys.dont_write_bytecode=True\n'
+    + 'spec=importlib.util.spec_from_file_location("r",sys.argv[1])\nm=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\n'
+    + `print(json.dumps(${expr}))`;
+  return JSON.parse(execFileSync('python3', ['-c', script, ASSET], { encoding: 'utf8' }));
+}
 const ST = '\x1b\\';
 const BEL = '\x07';
 const osc = (body, term = ST) => `\x1b]7501;${body}${term}`;
@@ -23,19 +31,19 @@ describe('osc7501 reporter core', () => {
   it('handles ST and BEL terminators', () => {
     const rows = run([osc('state=working:app=x', ST), osc('state=idle', BEL)]);
     expect(rows).toEqual([
-      { line: 1, session: 's', marker: 'working/prompt' },
-      { line: 2, session: 's', marker: 'ready/stop' },
+      { line: 1, pane: 'p', session: 's', marker: 'working/prompt' },
+      { line: 2, pane: 'p', session: 's', marker: 'ready/stop' },
     ]);
   });
 
   it('recognises a sequence split across chunks', () => {
     const rows = run(['junk\x1b]7501;state=bloc', `ked:kind=question${ST}`]);
-    expect(rows).toEqual([{ line: 2, session: 's', marker: 'blocked/question' }]);
+    expect(rows).toEqual([{ line: 2, pane: 'p', session: 's', marker: 'blocked/question' }]);
   });
 
   it('drops an oversized unterminated partial and recovers', () => {
     const rows = run(['\x1b]7501;' + 'a'.repeat(5000), osc('state=working')]);
-    expect(rows).toEqual([{ line: 2, session: 's', marker: 'working/prompt' }]);
+    expect(rows).toEqual([{ line: 2, pane: 'p', session: 's', marker: 'working/prompt' }]);
   });
 
   it('recovers when an unterminated sequence is followed by a valid one in the same chunk', () => {
@@ -60,7 +68,7 @@ describe('osc7501 reporter core', () => {
 
   it('bare clear removes the marker', () => {
     const rows = run([osc('state=working'), osc('state=clear')]);
-    expect(rows[1]).toEqual({ line: 2, session: 's', marker: null });
+    expect(rows[1]).toEqual({ line: 2, pane: 'p', session: 's', marker: null });
   });
 
   it('done and error end the turn', () => {
@@ -109,5 +117,19 @@ describe('osc7501 reporter core', () => {
     const src = readFileSync(HELPER, 'utf8');
     expect(src).toMatch(/rep\.PaneReader\(/);
     expect(src).not.toMatch(/rep\.extract\(|rep\.parse_report\(/);
+    expect(src).not.toMatch(/session_fold/);
+  });
+
+  it('names a marker <safe session><%pane>, byte-wise like the hook, and finds its own file from lastWritten', () => {
+    expect(py("m.marker_path('/h', 'web', '%3')")).toBe('/h/.tmuxifier-agent/web%3');
+    expect(py("m.marker_path('/h', 'my proj/x', '%12')")).toBe('/h/.tmuxifier-agent/my_proj_x%12');
+    expect(py("m.marker_path('/h', 'caf\\u00e9', '%3')")).toBe('/h/.tmuxifier-agent/caf__%3'); // é is two bytes
+    expect(py("m.legacy_marker_path('/h', 'my proj')")).toBe('/h/.tmuxifier-agent/my_proj');
+    expect(py("m.own_marker_path('/h', '%3', 'web:working:1:prompt:%3\\n')")).toBe('/h/.tmuxifier-agent/web%3');
+    expect(py("m.own_marker_path('/h', '%3', 'web:working:1:prompt\\n')")).toBe('/h/.tmuxifier-agent/web');
+    expect(py("[m.own_marker_path('/h', '%3', v) for v in ['web:working:1:prompt:%4\\n', 'junk', '', None, 5]]"))
+      .toEqual([null, null, null, null, null]);
+    expect(py("[hasattr(m, n) for n in ['session_fold', 'live_entries', '_sibling_folds', 'entry_live']]"))
+      .toEqual([false, false, false, false]);
   });
 });
