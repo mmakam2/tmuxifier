@@ -12,9 +12,17 @@ package com.tmuxifier.console.push
 //  - The jump target needs all three of session, window and pane, each in shape
 //    (`jumpTargetOf`). A push from an older server, or for an older event, has no
 //    window or pane: it opens the box, as before.
-//  - The notification id is per box and pane, so two agents on one box keep one
-//    notification each and an agent's newer push replaces its own. A push with no
-//    pane keeps the old id (the box's), so it replaces as it always did.
+//  - A notification is per box and pane, so two agents on one box keep one
+//    notification each and an agent's newer push replaces its own, whichever way
+//    it was posted. In the background the Firebase SDK posts it under the tag the
+//    server sets (`android.notification.tag` = `<boxId>:<pane>`, src/server/
+//    fcmPush.js) and id 0 (firebase-messaging 24.1.0, CommonNotificationBuilder:
+//    `new DisplayNotificationInfo(builder, getTag(params), 0)`), so the app posts
+//    a foreground one in the same slot (notificationSlotOf) and a pane holds one
+//    notification, not one of each. A push with no pane keeps the box's own id
+//    and no tag, as it always did (the SDK gives such a push a fresh tag of its
+//    own, so it never replaced anything there either). notificationIdOf stays the
+//    PendingIntent's request code, which must differ per box and pane.
 //
 // Pure (no Android imports), so it is JVM-tested.
 import com.tmuxifier.console.agent.JumpTarget
@@ -34,3 +42,10 @@ fun pushTargetOf(data: Map<String, String?>): PushTarget? {
 /** One notification per box and agent pane; the box's own id for a push with no pane. */
 fun notificationIdOf(boxId: String, pane: String?): Int =
     if (pane == null) boxId.hashCode() else "$boxId $pane".hashCode()
+
+/** Where the app posts a notification: the system replaces by (tag, id). */
+data class NotificationSlot(val tag: String?, val id: Int)
+
+/** The background push's own slot for a pane (the server's tag, id 0); the box's id and no tag without one. */
+fun notificationSlotOf(boxId: String, pane: String?): NotificationSlot =
+    if (pane == null) NotificationSlot(null, boxId.hashCode()) else NotificationSlot("$boxId:$pane", 0)

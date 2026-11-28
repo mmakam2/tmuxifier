@@ -4,7 +4,8 @@ package com.tmuxifier.console.push
 // conditional-Firebase build: without google-services.json there is no
 // FirebaseApp, and every push-related step quietly no-ops. The app posts a
 // notification itself only in the foreground (PushService); it is one per box
-// and agent pane, and its tap carries the push's data keys as extras.
+// and agent pane, in the same (tag, id) slot a background push is posted in,
+// and its tap carries the push's data keys as extras.
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -73,14 +74,16 @@ fun showAgentNotification(context: Context, target: PushTarget, title: String, b
         }
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
     }
-    // One id per box and agent pane (the box's own for a push with no pane): a
-    // newer event of the same agent replaces its notification, two agents on one
-    // box keep one each. The id is the PendingIntent's request code too: two
-    // PendingIntents that differ only in extras are one, and FLAG_UPDATE_CURRENT
-    // would point both notifications at the newer agent.
-    val id = notificationIdOf(target.boxId, target.jump?.pane)
+    // One notification per box and agent pane, in the slot the background push
+    // uses (notificationSlotOf: the server's tag and id 0; the box's own id for a
+    // push with no pane): a newer event of the same agent replaces its
+    // notification, foreground or background, two agents on one box keep one
+    // each. The request code is per box and pane too: two PendingIntents that
+    // differ only in extras are one, and FLAG_UPDATE_CURRENT would point both
+    // notifications at the newer agent.
+    val slot = notificationSlotOf(target.boxId, target.jump?.pane)
     val pi = PendingIntent.getActivity(
-        context, id, intent,
+        context, notificationIdOf(target.boxId, target.jump?.pane), intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
     val n = NotificationCompat.Builder(context, CHANNEL_AGENT)
@@ -91,5 +94,5 @@ fun showAgentNotification(context: Context, target: PushTarget, title: String, b
         .setContentIntent(pi)
         .build()
     // Without POST_NOTIFICATIONS (API 33+) this is a no-op; never a crash.
-    runCatching { NotificationManagerCompat.from(context).notify(id, n) }
+    runCatching { NotificationManagerCompat.from(context).notify(slot.tag, slot.id, n) }
 }

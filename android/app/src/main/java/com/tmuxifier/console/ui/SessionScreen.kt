@@ -14,6 +14,7 @@ package com.tmuxifier.console.ui
 // handlers wired to the API, so touches structurally have no path to the pty
 // — scroll and select are the only gestures that do anything. The bottomBar
 // slot hosts the action row and composer (later tasks).
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -170,9 +171,10 @@ fun SessionScreen(
                     // dialog over the app, split screen) and the session sheet
                     // closed: a capture drawn behind the sheet is not being
                     // looked at. A failed post shows nothing; the chip stays
-                    // `done` and the next capture asks again (or not, for a 4xx).
+                    // `done` and a later capture asks again, spaced (or not, for
+                    // a final refusal: AgentAck.kt).
                     val front = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !sheetOpen
-                    ackNext(ack, ackCandidate(boxId, s), front)?.let { key ->
+                    ackNext(ack, ackCandidate(boxId, s), front, SystemClock.elapsedRealtime())?.let { key ->
                         ack = ackStarted(ack, key)
                         scope.launch { // not the poll's own coroutine: a slow post must not delay the next capture
                             val status = try {
@@ -181,7 +183,7 @@ fun SessionScreen(
                             } catch (e: ApiException) {
                                 e.status
                             }
-                            ack = ackFinished(ack, key, status)
+                            ack = ackFinished(ack, key, status, SystemClock.elapsedRealtime())
                             if (status == 401) onUnauthorized()
                         }
                     }

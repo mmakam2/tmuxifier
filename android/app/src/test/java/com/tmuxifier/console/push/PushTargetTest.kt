@@ -41,4 +41,15 @@ class PushTargetTest {
         assertNotEquals(notificationIdOf("b1", "%12"), notificationIdOf("b2", "%12"))
         assertNotEquals(notificationIdOf("b1", "%12"), notificationIdOf("b1", null))
     }
+
+    // A background push is posted by the Firebase SDK as notify(<the server's tag>, 0, n);
+    // the app's foreground post of the same pane must land in that slot, not beside it.
+    @Test fun aPaneNotificationIsPostedInTheBackgroundPushsSlot() {
+        assertEquals(NotificationSlot("b1:%12", 0), notificationSlotOf("b1", "%12")) // fcmPush.js: `${boxId}:${pane}`
+        assertEquals(NotificationSlot("3f2b8c1e-5d47:%7", 0), notificationSlotOf("3f2b8c1e-5d47", "%7"))
+        assertNotEquals(notificationSlotOf("b1", "%12"), notificationSlotOf("b1", "%13"))
+        assertNotEquals(notificationSlotOf("b1", "%12"), notificationSlotOf("b2", "%12"))
+        // No pane: the box's own id and no tag, as before.
+        assertEquals(NotificationSlot(null, "b1".hashCode()), notificationSlotOf("b1", null))
+    }
 }
