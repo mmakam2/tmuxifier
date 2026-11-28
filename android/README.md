@@ -16,8 +16,8 @@ wrapper (`gradlew` + `gradle/wrapper/gradle-wrapper.jar`) is committed and downl
 8.10.2 itself on first run.
 
 Versions pinned here: JDK 17, AGP 8.7.3, Kotlin 2.1.0, Compose BOM 2024.12.01, Gradle 8.10.2
-(wrapper), compileSdk/targetSdk 35, minSdk 26; SDK packages `platform-tools`,
-`platforms;android-35`, `build-tools;35.0.0`. If one of DEPLOY.md's download URLs 404s, the
+(wrapper), compileSdk/targetSdk 36 (Play refuses an upload that targets less), minSdk 26; SDK packages `platform-tools`,
+`platforms;android-36`, `build-tools;35.0.0`. If one of DEPLOY.md's download URLs 404s, the
 pinned version moved — pick the nearest current one and record the change in both files.
 
 ## Commands

@@ -9,12 +9,12 @@ plugins {
 
 android {
     namespace = "com.tmuxifier.console"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.tmuxifier.console"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 23
+        targetSdk = 36
+        versionCode = 24
         versionName = "1.3.0"
     }
     // Release signing only when the operator's keystore exists (same

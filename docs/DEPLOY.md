@@ -256,7 +256,7 @@ unzip -q /tmp/clt.zip -d /opt/android-sdk/cmdline-tools
 mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest
 rm /tmp/clt.zip
 yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null
-/opt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+/opt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0"
 # No standalone Gradle: the committed wrapper (android/gradlew) downloads 8.10.2 itself on first run.
 
 # Project setup (first time only)
