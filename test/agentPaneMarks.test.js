@@ -46,12 +46,13 @@ describe('parsePaneMarks', () => {
     const m = parsePaneMarks(out);
     expect(Object.keys(m).sort()).toEqual(['%1', '%2', '%3']);
     expect(m['%1'].state).toBe('blocked');
-    expect(m['%2']).toEqual({ session: 'main', state: 'working', cause: 'prompt', ts: 1700000300 });
+    expect(m['%2']).toEqual({ session: 'main', state: 'working', cause: 'prompt', ts: 1700000300, wide: true });
+    expect('wide' in m['%1']).toBe(false); // its own marker
     expect(m['%3']).toEqual(m['%2']);
   });
   it('reads the legacy three-field marker as session-wide', () => {
     const out = [A(['main:waiting:1700000100']), P(['main:@0:%1:1:1:0:claude'])].join('\n');
-    expect(parsePaneMarks(out)['%1']).toEqual({ session: 'main', state: 'ready', cause: 'stop', ts: 1700000100 });
+    expect(parsePaneMarks(out)['%1']).toEqual({ session: 'main', state: 'ready', cause: 'stop', ts: 1700000100, wide: true });
   });
   it('with no trustworthy listing keeps pane markers and applies session-wide ones to nothing', () => {
     const out = A(['main:working:1700000300:prompt', 'main:blocked:1700000100:permission:%1']);
@@ -79,9 +80,12 @@ describe('parsePaneMarks', () => {
   });
   it('speaks for a pane whose own marker was dropped as stale', () => {
     // %1's own marker names a session that does not hold it, so %1 has no marker
-    // of its own; the listing still says it is an agent pane of `main`.
+    // of its own in this read; the listing still says it is an agent pane of
+    // `main`. The entry is marked `wide`: the health history refuses it for a pane
+    // its own marker spoke for before (a moved pane), and takes it for one whose
+    // id merely matches a dead session's leftover file.
     const out = [A(['main:working:1700000300:prompt', 'gone:blocked:1700000100:permission:%1']), P(['main:@0:%1:1:1:0:claude'])].join('\n');
-    expect(parsePaneMarks(out)['%1']).toEqual({ session: 'main', state: 'working', cause: 'prompt', ts: 1700000300 });
+    expect(parsePaneMarks(out)['%1']).toEqual({ session: 'main', state: 'working', cause: 'prompt', ts: 1700000300, wide: true });
   });
   it('treats a capped pane listing as untrustworthy: pane markers survive, session-wide ones apply to nothing', () => {
     const rows = Array.from({ length: 400 }, (_, i) => `main:@0:%${i + 10}:1:0:0:claude`);

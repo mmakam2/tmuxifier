@@ -8,12 +8,18 @@ import { createBoxActions } from '../src/server/boxActions.js';
 import { hashPassword } from '../src/server/auth.js';
 
 let app, dir, calls, boxId, failNext, setupRunning, probed, probeThrows, serverArgs;
+// The poller's two calls in the order they happened, each with how many remote scripts had run
+// when it started; refreshImpl stands in for the light probe's answer.
+let refreshed, refreshImpl, order;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-kill-'));
   calls = [];
   failNext = false;
   probed = [];
   probeThrows = false;
+  refreshed = [];
+  refreshImpl = null;
+  order = [];
   const run = async (argv) => {
     calls.push(argv);
     if (failNext) { failNext = false; return { code: 1, stdout: '', stderr: "can't find session: web" }; }
@@ -36,8 +42,15 @@ beforeEach(async () => {
     getSnapshot: () => ({}),
     probeOne: async (id) => {
       probed.push(id);
+      order.push({ call: 'probeOne', id, scriptsSoFar: calls.length });
       if (probeThrows) throw new Error('probe blew up');
       return { reachable: true };
+    },
+    // Not async: a synchronous throw stays synchronous.
+    refreshAgents: (id) => {
+      refreshed.push(id);
+      order.push({ call: 'refreshAgents', id, scriptsSoFar: calls.length });
+      return refreshImpl ? refreshImpl(id) : Promise.resolve(true);
     },
   };
   serverArgs = { config, store, sessions, statusChecker, statusPoller, boxActions, setupManager };
@@ -161,5 +174,53 @@ test('POST kill works on a deployment with no status poller wired', async () => 
   const h = await headers(noPoller);
   const res = await noPoller.inject({ method: 'POST', url: killUrl(), headers: h, payload: { session: 'web' } });
   expect(res.statusCode).toBe(200);
+  expect(probed).toEqual([]);
+});
+
+// A kill also records the box's agents into the health history: the agent rows read the health
+// series, so without it a killed pane's row lingers (a click on it is a 502) until the watch
+// stream nudges a light probe or the next sweep, always the sweep with the watch off or held.
+test('POST kill probes and then refreshes the agents, each once, after the kill ran', async () => {
+  const h = await headers();
+  for (const payload of [{ session: 'web' }, { session: 'web', windowId: '@7' }]) {
+    order = [];
+    calls = [];
+    const res = await app.inject({ method: 'POST', url: killUrl(), headers: h, payload });
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true }]);
+    expect(calls.length).toBe(1);
+    expect(order).toEqual([
+      { call: 'probeOne', id: boxId, scriptsSoFar: 1 },
+      { call: 'refreshAgents', id: boxId, scriptsSoFar: 1 },
+    ]);
+  }
+});
+
+test('POST kill still answers ok when the refresh resolves false, throws synchronously or rejects, or is not there', async () => {
+  const h = await headers();
+  for (const impl of [() => false, () => { throw new Error('sync boom'); }, () => Promise.reject(new Error('rejected'))]) {
+    refreshImpl = impl;
+    refreshed = [];
+    const res = await app.inject({ method: 'POST', url: killUrl(), headers: h, payload: { session: 'web' } });
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true }]);
+    expect(refreshed).toEqual([boxId]);
+  }
+  probed = [];
+  const probeOnly = buildServer({ ...serverArgs, statusPoller: { getSnapshot: () => ({}), probeOne: async (id) => { probed.push(id); } } });
+  const res = await probeOnly.inject({ method: 'POST', url: killUrl(), headers: await headers(probeOnly), payload: { session: 'web' } });
+  expect([res.statusCode, res.json()]).toEqual([200, { ok: true }]);
+  expect(probed).toEqual([boxId]);
+});
+
+test('POST kill never refreshes the agents after a refused or failed kill', async () => {
+  const h = await headers();
+  const post = (payload, url = killUrl()) => app.inject({ method: 'POST', url, headers: h, payload });
+  failNext = true;
+  expect((await post({ session: 'web' })).statusCode).toBe(502);
+  expect((await post({ session: 'bad name' })).statusCode).toBe(400);
+  expect((await post({ session: 'web', windowId: '7' })).statusCode).toBe(400);
+  expect((await post({ session: 'web' }, '/api/boxes/nope/kill')).statusCode).toBe(404);
+  setupRunning = true;
+  expect((await post({ session: 'web' })).statusCode).toBe(409);
+  expect(refreshed).toEqual([]);
   expect(probed).toEqual([]);
 });

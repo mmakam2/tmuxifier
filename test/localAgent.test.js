@@ -24,7 +24,7 @@ test('readMarks parses a valid marker through the probe allowlist', async () => 
   const home = tmpHome();
   fs.mkdirSync(path.join(home, '.tmuxifier-agent'));
   fs.writeFileSync(path.join(home, '.tmuxifier-agent', 'local'), 'local:working:1722600000\n');
-  expect(await readPlain(home)).toEqual({ '%1': { session: 'local', state: 'working', cause: 'prompt', ts: 1722600000 } });
+  expect(await readPlain(home)).toEqual({ '%1': { session: 'local', state: 'working', cause: 'prompt', ts: 1722600000, wide: true } });
 });
 
 test('readMarks returns null for a missing dir, malformed content, and bad state', async () => {
@@ -57,7 +57,7 @@ test('readMarks skips directory and oversized entries, keeping the valid marker'
   fs.writeFileSync(path.join(dir, 'local'), 'local:working:1722600000\n');
   fs.writeFileSync(path.join(dir, 'huge'), 'x'.repeat(2000)); // past the read guard
   fs.mkdirSync(path.join(dir, 'subdir'));                     // not a regular file
-  expect(await readPlain(home)).toEqual({ '%1': { session: 'local', state: 'working', cause: 'prompt', ts: 1722600000 } });
+  expect(await readPlain(home)).toEqual({ '%1': { session: 'local', state: 'working', cause: 'prompt', ts: 1722600000, wide: true } });
 });
 
 test('sample() reads tmux sessions via the shared STATUS_FMT parser', async () => {
@@ -322,7 +322,7 @@ test('sample() applies a session-wide marker to the Host Shell\'s agent panes wi
     home,
     runTmux: tmuxStub('__PANE__ local:@0:%1:1:1:0:codex\n__PANE__ local:@0:%2:2:0:0:zsh\n'),
   });
-  expect({ ...(await sampler.sample()).paneMarks }).toEqual({ '%1': { session: 'local', state: 'blocked', cause: 'question', ts: 1722600009 } });
+  expect({ ...(await sampler.sample()).paneMarks }).toEqual({ '%1': { session: 'local', state: 'blocked', cause: 'question', ts: 1722600009, wide: true } });
 });
 
 test('sample() reports an empty pane list for an empty tmux, and none when the pane listing cannot be trusted', async () => {
@@ -359,4 +359,15 @@ test('readMarks returns the per-pane reading, null-prototype, from one read of t
   expect(Object.getPrototypeOf(out)).toBeNull();
   expect({ ...out }).toEqual({ '%1': { session: 'local', state: 'ready', cause: 'stop', ts: 1722600001 } });
   expect(await readMarks(tmpHome())).toBeNull();
+});
+
+test('sample() reads pane rows with no session rows as an unknown listing, as the box probe does', async () => {
+  // `ls` answers with no rows while list-panes lists a pane: the two contradict each other.
+  const torn = createLocalAgentSampler({ home: tmpHome(), runTmux: tmuxStub('__PANE__ local:@0:%1:1:1:0:claude\n', '') });
+  const s = await torn.sample();
+  expect(s.sessions).toEqual([]);
+  expect('panes' in s).toBe(false);
+  // No session rows and no pane rows is still an empty tmux.
+  const empty = createLocalAgentSampler({ home: tmpHome(), runTmux: tmuxStub('', '') });
+  expect((await empty.sample()).panes).toEqual([]);
 });

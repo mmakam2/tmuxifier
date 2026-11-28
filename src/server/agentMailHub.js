@@ -139,7 +139,9 @@ import {
 // connected waiter of that session whose OWN pane's marker names the session and reads `ready`
 // (state `handed`, with `handedAt`/`handedPane`), the longest-held such waiter first. An idle
 // agent takes mail while a sibling pane of its session works; a waiter whose pane has no marker
-// (or one that is working or blocked) is never handed anything. Either way the thread's
+// (or one that is working or blocked) is never handed anything, so it is not what the queued
+// status calls listening (`who` calls a waiter listening once its pane's marker names its
+// session, whatever the state). Either way the thread's
 // permission is re-checked at that moment, and a thread whose permission is gone is closed
 // instead. `ack` confirms a handed message; a waiter
 // that connects puts back to `queued` the session's handed messages that were handed on its own
@@ -549,7 +551,9 @@ export function createAgentMailHub({ store, policyStore, listBoxes, paneMarksOf,
     }
     if (state === 'working') return statusPhrase('queued-working', { who });
     if (state === 'blocked') return statusPhrase('queued-blocked', { who });
-    return waitersOf(recipient.boxId, recipient.session) > 0 ? statusPhrase('queued') : statusPhrase('queued-not-listening', { who });
+    // Only a waiter that delivery could pick counts: one on a pane with no marker of its session
+    // never is (paneReady).
+    return firstWaiter(recipient, marksOf(recipient.boxId)) !== null ? statusPhrase('queued') : statusPhrase('queued-not-listening', { who });
   }
 
   // Where one message stands: queued (with why), handed to a listening waiter and not yet
@@ -657,6 +661,15 @@ export function createAgentMailHub({ store, policyStore, listBoxes, paneMarksOf,
     return null;
   };
 
+  // Is a waiter of `me` held on a pane whose own marker names `me`'s session, whatever its state?
+  // That waiter will take mail once its pane reads ready; one on a pane with no such marker never
+  // will, so `who` does not call it listening.
+  const markedWaiter = (me, marks) => {
+    const set = waiters.get(me.boxId, me.session);
+    if (set) for (const w of set) if (marks !== null && Object.hasOwn(marks, w.pane) && marks[w.pane]?.session === me.session) return true;
+    return false;
+  };
+
   // Could anything of `me`'s take a message right now? Cheap: no store reads.
   function canTake(me) {
     if (!pending.get(me.boxId, me.session)) return false;
@@ -742,7 +755,7 @@ export function createAgentMailHub({ store, policyStore, listBoxes, paneMarksOf,
         if (box.id === me.boxId && session === me.session) continue;
         const state = sessionState(marks, session);
         if (!Object.hasOwn(STATE_WORD, state)) continue;
-        rows.push({ box: labelOf(boxes, box.id) || box.id, session, state: STATE_WORD[state], listening: waitersOf(box.id, session) > 0 });
+        rows.push({ box: labelOf(boxes, box.id) || box.id, session, state: STATE_WORD[state], listening: markedWaiter({ boxId: box.id, session }, marks) });
       }
     }
     return { ok: true, text: renderWho(rows, starters) };

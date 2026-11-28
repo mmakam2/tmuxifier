@@ -21,6 +21,10 @@ import { createWorkerBench } from './helpers/workerBench.js';
 
 let dir, bench, store, workerStore, app, browser, bearer;
 let snapshot, probes, probeThrows, setupJobs, execOverride;
+// The light probe that records the box's agents into the health history: the calls in order
+// with probeOne's (`polls`), and what it answers (`refreshImpl`). `refreshAgents: false` boots a
+// poller without it.
+let refreshes, polls, refreshImpl;
 
 const route = (m, url, extra = {}) => app.inject({ method: m, url, headers: browser, ...extra });
 
@@ -37,6 +41,9 @@ beforeEach(() => {
   snapshot = {};
   probes = [];
   probeThrows = false;
+  refreshes = [];
+  polls = [];
+  refreshImpl = null;
   setupJobs = new Map();
   execOverride = null;
 });
@@ -48,7 +55,7 @@ afterEach(async () => {
   if (dir) await fs.rm(dir, { recursive: true, force: true });
 });
 
-async function boot({ withWorkers = true, withMail = false, starter = null } = {}) {
+async function boot({ withWorkers = true, withMail = false, starter = null, refreshAgents = true } = {}) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tmuxifier-workersr-'));
   store = createStore({ dataDir: dir });
   const orders = await store.addBox({ host: '192.168.1.10', label: 'orders' });
@@ -58,8 +65,16 @@ async function boot({ withWorkers = true, withMail = false, starter = null } = {
   const setupManager = { currentForBox: (id) => setupJobs.get(id) ?? null, cancelForBox() {} };
   const statusPoller = {
     getSnapshot: () => snapshot,
-    probeOne: async (id) => { probes.push(id); if (probeThrows) throw new Error('probe hung up'); },
+    probeOne: async (id) => { probes.push(id); polls.push(['probeOne', id]); if (probeThrows) throw new Error('probe hung up'); },
   };
+  // Not async: a synchronous throw stays synchronous.
+  if (refreshAgents) {
+    statusPoller.refreshAgents = (id) => {
+      refreshes.push(id);
+      polls.push(['refreshAgents', id]);
+      return refreshImpl ? refreshImpl(id) : Promise.resolve(true);
+    };
+  }
   // index.js's sessionsOf: null unless the snapshot entry is there and reachable.
   const sessionsOf = (id) => { const e = statusPoller.getSnapshot()[id]; return e?.reachable ? e.sessions : null; };
   // index.js's panesOf: the pane rows only when the entry is reachable and carries them.
@@ -183,6 +198,39 @@ test('start runs the real starter on the box, answers the session and re-probes 
   expect(probes).toEqual([orders.id, orders.id]);
 });
 
+// A start also records the box's agents into the health history, which is what the agent rows
+// read: without it the started worker's row is missing until the watch stream nudges a light
+// probe or the next sweep (always the sweep with the watch off or held).
+test('start probes and then refreshes the agents, each once, after the start', async () => {
+  const { orders } = await boot();
+  await workerStore.set(orders.id, { projects: [{ name: 'api', dir: projectDir('api') }] });
+  const res = await route('POST', `/api/boxes/${orders.id}/workers/start`, { payload: {} });
+  expect(res.json()).toEqual({ ok: true, session: 'worker-api-1' });
+  expect(polls).toEqual([['probeOne', orders.id], ['refreshAgents', orders.id]]);
+});
+
+test('start still answers its session when the refresh resolves false, throws synchronously or rejects, or is not there', async () => {
+  const { orders } = await boot();
+  await workerStore.set(orders.id, { projects: [{ name: 'api', dir: projectDir('api') }], max: 8 });
+  const variants = [() => false, () => { throw new Error('sync boom'); }, () => Promise.reject(new Error('rejected'))];
+  for (const [i, impl] of variants.entries()) {
+    refreshImpl = impl;
+    refreshes = [];
+    const res = await route('POST', `/api/boxes/${orders.id}/workers/start`, { payload: {} });
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, session: `worker-api-${i + 1}` }]);
+    expect(refreshes).toEqual([orders.id]);
+  }
+  await app.close(); app = null;
+  await fs.rm(dir, { recursive: true, force: true });
+  const again = await boot({ refreshAgents: false });
+  // Another project: the bench's tmux server still holds the first boot's workers.
+  await workerStore.set(again.orders.id, { projects: [{ name: 'web', dir: projectDir('web') }] });
+  probes = [];
+  const res = await route('POST', `/api/boxes/${again.orders.id}/workers/start`, { payload: {} });
+  expect([res.statusCode, res.json()]).toEqual([200, { ok: true, session: 'worker-web-1' }]);
+  expect(probes).toEqual([again.orders.id]);
+});
+
 test('start ignores mailStart: the operator\'s start is not a mail start', async () => {
   const { orders } = await boot();
   await workerStore.set(orders.id, { projects: [{ name: 'api', dir: projectDir('api') }], mailStart: false });
@@ -206,6 +254,7 @@ test('a project that is not a project name is 400 before anything runs', async (
   }
   expect(ran).toBe(0);
   expect(probes).toEqual([]);
+  expect(refreshes).toEqual([]);
 });
 
 test('every start failure answers its status, the operator\'s wording and the code', async () => {
@@ -251,6 +300,7 @@ test('every start failure answers its status, the operator\'s wording and the co
   await expectFail(await start(orders.id), 502, 'start-failed', 'starting the agent failed');
 
   expect(probes).toEqual([]);
+  expect(refreshes).toEqual([]);
 });
 
 test('a code the route has no wording for (bad-mode, or one added later) is 502 starting the agent failed', async () => {

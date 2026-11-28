@@ -1218,8 +1218,13 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
       return reply.code(502).send({ error: String(res?.stderr || '').trim() || 'failed to kill' });
     }
     // Re-probe so the client's next /api/status no longer lists what was just
-    // killed. Best-effort in both directions — see the window route above.
+    // killed, then refresh the agent history so the agent rows (read from the
+    // health series) drop the killed panes now rather than at the next sweep: a
+    // lingering row is a click that answers 502. Both best-effort in every
+    // direction, in this order, and never after a failed kill — see the window
+    // route above.
     try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
+    try { await statusPoller?.refreshAgents?.(box.id); } catch { /* the next sweep will catch up */ }
     return { ok: true };
   });
   // Re-probe ONE box now and hand back its fresh status entry. GET /api/status
@@ -1313,6 +1318,15 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
   app.get('/api/boxes/:id/pane', { preHandler: requireAuth }, async (req, reply) => {
     const box = await store.getBox(req.params.id);
     if (!box) return reply.code(404).send({ error: 'not found' });
+    // `session` was the browser preview's parameter before previews named a
+    // pane. A stale tab or an old script still sending it must fail loudly, not
+    // silently read the configured session's screen. A device token gets the
+    // 403 it always got for it, before anything is validated. (Neither the app,
+    // released or current, nor the MCP server sends it.)
+    if (req.query?.session !== undefined) {
+      if (req.deviceId) return reply.code(403).send({ error: 'browser session required' });
+      return reply.code(400).send({ error: 'the session parameter is gone: name a pane with pane=%N' });
+    }
     const lines = req.query?.lines != null ? Number(req.query.lines) : 200;
     // Read once, before the capture, on both branches: the answer's `agentTs` is
     // what a client posts to say "seen", and a marker newer than the screen it
@@ -2129,8 +2143,10 @@ export function buildServer({ config, store, sessions, statusChecker, statusPoll
     }
     const r = await agentWorkers.starter.start(box, project === undefined ? {} : { project });
     if (r?.ok === true) {
-      // Best-effort, as the window and kill routes: the next /api/status lists the new session.
+      // Best-effort, as the window and kill routes: the next /api/status lists the new
+      // session, and the agent history (the agent rows' source) has the new worker's pane.
       try { await statusPoller?.probeOne?.(box.id); } catch { /* the next sweep will catch up */ }
+      try { await statusPoller?.refreshAgents?.(box.id); } catch { /* the next sweep will catch up */ }
       return { ok: true, session: r.session };
     }
     const code = typeof r?.code === 'string' ? r.code : 'start-failed';

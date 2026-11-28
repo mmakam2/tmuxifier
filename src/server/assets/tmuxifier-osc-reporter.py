@@ -510,8 +510,12 @@ def _bare_clear(home, pane_id, last_written):
 # rewrite the session-wide file after a sibling's successor removed it; it
 # persists that line, so its own successor inherits and removes it. The
 # server applies a four-field file only to agent panes of that session that
-# have no marker of their own, so such a file reads correctly meanwhile (and
-# one written too late to be persisted stays inert beside the pane files).
+# have no marker of their own, and never to a pane whose state last came from
+# a marker of its own, so such a file reads correctly meanwhile. One written
+# too late to be persisted is never removed: it no longer speaks for any pane
+# that has had its own marker, but it still speaks for a marker-less agent
+# pane of that session (an agent whose writer has not been re-pushed, or one
+# with no writer at all), stale state included, until something replaces it.
 # --------------------------------------------------------------------------
 
 class PaneReader:

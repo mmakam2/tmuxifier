@@ -316,6 +316,36 @@ describe('agentMailHub delivery: by pane', () => {
   });
 });
 
+// A waiter counts as listening only on a pane whose own marker names its session: a waiter on a
+// pane with no marker is never handed mail (above), so it must not read as someone listening.
+describe('agentMailHub delivery: who is listening', () => {
+  test('the only waiter on a pane with no marker: the send says not listening, and so does who', async () => {
+    h.paneMarks.b = { '%1': paneMark('main', 'ready') };
+    const w = watch(hub.waitMail(B, '%3', ac.signal)); // %3 has no marker
+    expect(hub.listening('b')).toEqual({ main: 1 }); // connected, as the drawer counts it
+    const s = await hub.send(O, 'billing', 'ping');
+    expect(s.text).toBe(`Sent. Thread ${s.threadId}. queued: billing/main is not listening`);
+    expect(hub.threadStatus(store.thread(s.threadId), 'starter')).toBe('queued: billing/main is not listening');
+    expect((await hub.who(O)).text).toBe(renderWho([{ box: 'billing', session: 'main', state: 'idle', listening: false }]));
+    // nor one whose pane's marker names another session
+    h.paneMarks.b['%3'] = paneMark('review', 'ready');
+    expect(hub.threadStatus(store.thread(s.threadId), 'starter')).toBe('queued: billing/main is not listening');
+    expect((await hub.who(O)).text).toContain('billing/main  idle, not listening');
+    expect(w.done).toBe(false);
+    // its own marker arrives: listening, and handed at the next change
+    h.paneMarks.b['%3'] = paneMark('main', 'ready');
+    expect((await hub.who(O)).text).toContain('billing/main  idle, listening');
+    hub.boxChanged('b');
+    expect((await w.p).messageId).toBe(msgs(s.threadId)[0].id);
+  });
+
+  test('a waiter on a marked pane that is working still reads as listening in who', async () => {
+    h.paneMarks.b = { '%1': paneMark('main', 'working') };
+    watch(hub.waitMail(B, '%1', ac.signal));
+    expect((await hub.who(O)).text).toBe(renderWho([{ box: 'billing', session: 'main', state: 'working', listening: true }]));
+  });
+});
+
 describe('agentMailHub delivery: confirmation and offering again', () => {
   test('ack by the recipient makes it delivered; ack by anyone else, or of a queued message, is false', async () => {
     marks.b = { main: mark('ready'), review: mark('ready') };

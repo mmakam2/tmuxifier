@@ -145,11 +145,12 @@ export function sampleOf(status, at, opts = {}) {
   }
   // Agents, one entry per tmux PANE whose foreground command is an agent
   // (agentKindOf), keyed by pane id. `sample.agents` is set (possibly {}) only
-  // when the probe listed sessions AND their panes — or listed no sessions,
-  // which means no panes. Sessions without a pane listing (it failed, or hit
-  // its row cap) give NO agents key: the listing cannot be trusted to be
-  // complete, so a pane missing from it is not an exit, and the edges below
-  // must neither run on it nor replace their baseline with it.
+  // when the probe listed sessions AND their panes (an empty box lists both
+  // empty: status.js tmuxState). Sessions without a pane listing (it failed,
+  // hit its row cap, or showed pane rows with no session rows) give NO agents
+  // key, even with no sessions: the listing cannot be trusted to be complete,
+  // so a pane missing from it is not an exit, and the edges below must neither
+  // run on it nor replace their baseline with it.
   //
   // The pane listing is the authority for which panes exist; a marker for a
   // pane it does not list builds nothing. The entry carries the pane's place
@@ -168,7 +169,7 @@ export function sampleOf(status, at, opts = {}) {
   // own ts and never against a clock, so time passing can never re-arm `done`;
   // only a new marker (a later ts) can.
   const { seenOf } = opts;
-  if (Array.isArray(s.sessions) && (Array.isArray(s.panes) || s.sessions.length === 0)) {
+  if (Array.isArray(s.sessions) && Array.isArray(s.panes)) {
     // Null-prototype, like every map keyed by box output.
     const agents = Object.create(null);
     for (const [pane, p] of placePanes(s)) {
@@ -468,6 +469,48 @@ export function createHealthHistory({
   }
   const seenOf = (boxId) => (pane) => seen.get(boxId)?.get(pane);
 
+  // The panes of each box whose state last came from their OWN marker (box id ->
+  // Set of pane ids), for as long as the pane stays in the edge baseline; in
+  // memory, like the baseline. Such a pane never takes a state from a
+  // session-wide marker (an entry of `paneMarks` with `wide: true`, see
+  // status.js parsePaneMarks): a read that offers it only one is read exactly as
+  // a read that offers it no marker, so every path below sees an ordinary gap.
+  // That read is systematic, not rare: an exiting agent removes its own marker
+  // while it is still the pane's foreground command, which is what triggers the
+  // light probe, and a session-wide file left by a writer of the same session
+  // that has not been re-pushed would otherwise become the exiting agent's
+  // state (a false agent-blocked or agent-input for an agent that is leaving).
+  // A pane that never had its own marker keeps following the session-wide one.
+  const ownMarked = new Map();
+  // `status` as the history reads it: the session-wide marks offered to
+  // own-marked panes dropped. The same object when nothing is dropped.
+  function readable(boxId, status) {
+    const own = ownMarked.get(boxId);
+    const marks = status && status.paneMarks && typeof status.paneMarks === 'object' ? status.paneMarks : null;
+    if (!own || !marks) return status;
+    let kept = null;
+    for (const pane of Object.keys(marks)) {
+      if (!marks[pane] || marks[pane].wide !== true || !own.has(pane)) continue;
+      if (!kept) kept = Object.assign(Object.create(null), marks);
+      delete kept[pane];
+    }
+    return kept ? { ...status, paneMarks: kept } : status;
+  }
+  // After a read (already through readable) moved the box's baseline to
+  // `baseline`: a pane its own marker spoke for is own-marked, one a
+  // session-wide marker spoke for is not, one with no marker keeps what it was
+  // (a gap), and a pane that left the baseline is forgotten.
+  function noteOwn(boxId, status, baseline) {
+    const was = ownMarked.get(boxId);
+    const marks = status && status.paneMarks && typeof status.paneMarks === 'object' ? status.paneMarks : null;
+    const now = new Set();
+    for (const pane of Object.keys(baseline || {})) {
+      const m = marks && Object.hasOwn(marks, pane) ? marks[pane] : undefined;
+      if (m ? m.wide !== true : !!was && was.has(pane)) now.add(pane);
+    }
+    if (now.size) ownMarked.set(boxId, now); else ownMarked.delete(boxId);
+  }
+
   return {
     record(snapshot, boxes) {
       const at = now();
@@ -476,7 +519,7 @@ export function createHealthHistory({
       let seenChanged = false;
       for (const box of boxes) {
         present.add(box.id);
-        const status = snapshot[box.id];
+        const status = readable(box.id, snapshot[box.id]);
         if (!status) continue;
         const sample = sampleOf(status, at, { seenOf: seenOf(box.id) });
         const ring = series.get(box.id) || [];
@@ -488,6 +531,7 @@ export function createHealthHistory({
         const { onScreen, unplaced } = paneSets(status);
         const { events: evs, state } = classifyTransitions(prev, sample, thresholds, threshState.get(box.id), onScreen, unplaced);
         threshState.set(box.id, state);
+        noteOwn(box.id, status, state.agents);
         lastSample.set(box.id, sample);
         if (agentsKey(prev) !== agentsKey(sample)) changed(box.id);
         if (pruneSeen(box.id, status)) seenChanged = true;
@@ -503,7 +547,7 @@ export function createHealthHistory({
       }
       if (emitted) save(events);
       for (const id of [...series.keys()]) {
-        if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); }
+        if (!present.has(id)) { series.delete(id); lastSample.delete(id); threshState.delete(id); ownMarked.delete(id); }
       }
       for (const id of [...seen.keys()]) {
         if (!present.has(id)) { seen.delete(id); seenChanged = true; }
@@ -522,9 +566,10 @@ export function createHealthHistory({
     // is given a single box). Returns false, changing nothing, without a sweep
     // baseline, for a box whose last sample was down or stopped, or when the
     // status carries no session listing or no complete pane listing.
-    recordAgents(box, status) {
+    recordAgents(box, raw) {
       const prev = lastSample.get(box.id);
-      if (!prev || !prev.up || prev.stopped || !status) return false;
+      if (!prev || !prev.up || prev.stopped || !raw) return false;
+      const status = readable(box.id, raw);
       const fresh = sampleOf(status, prev.t, { seenOf: seenOf(box.id) });
       if (!fresh.agents) return false;
       const next = { ...prev };
@@ -554,7 +599,9 @@ export function createHealthHistory({
           ? { ...now, state: was.state, cause: was.cause, ts: was.ts }
           : now;
       }
-      threshState.set(box.id, { ...st, agents: carryUnplaced(baseline, before, unplaced) });
+      const carried = carryUnplaced(baseline, before, unplaced);
+      threshState.set(box.id, { ...st, agents: carried });
+      noteOwn(box.id, status, carried);
       replaceLast(box.id, next);
       if (agentsKey(prev) !== agentsKey(next)) changed(box.id);
       if (pruneSeen(box.id, status)) persistSeen();

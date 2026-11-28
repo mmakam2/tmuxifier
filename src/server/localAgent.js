@@ -151,10 +151,12 @@ export function createLocalAgentSampler({ home = os.homedir(), runTmux = runTmux
         if (res.code === 0) paneRows = String(res.stdout).split('\n').filter(Boolean).slice(0, PANE_ROWS_MAX);
       } catch { /* no listing: no pane is ruled out */ }
       // The pane listing follows the probe's rule (status.js tmuxState): an
-      // empty tmux has an empty list, otherwise it is present only when the
-      // listing can be taken as every pane, and its absence means unknown.
+      // empty tmux (no session rows, no pane rows) has an empty list, pane rows
+      // with no session rows contradict each other and leave it out, otherwise
+      // it is present only when the listing can be taken as every pane, and its
+      // absence means unknown.
       if (Array.isArray(out.sessions)) {
-        if (!out.sessions.length) out.panes = [];
+        if (!out.sessions.length) { if (!paneRows.length) out.panes = []; }
         else {
           const listing = parseTmuxPanes(paneRows.join('\n'));
           if (listing.complete) out.panes = listing.panes;

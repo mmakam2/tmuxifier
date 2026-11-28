@@ -663,18 +663,18 @@ const marksOf = (...lines) => { const out = parsePaneMarks(lines.join('\n')); re
 test('parsePaneMarks extracts allowlisted marker lines, the legacy three-field ones mapped', () => {
   const out = marksOf('__META__ cpus=2', '__AGENT__ web:working:1718000000', '__AGENT__ ops:waiting:1718000001', 'web:2:1:1718000000:claude', agentPane('web', '%1'), agentPane('ops', '%2'));
   expect(out).toEqual({
-    '%1': { session: 'web', state: 'working', cause: 'prompt', ts: 1718000000 },
-    '%2': { session: 'ops', state: 'ready', cause: 'stop', ts: 1718000001 },
+    '%1': { session: 'web', state: 'working', cause: 'prompt', ts: 1718000000, wide: true },
+    '%2': { session: 'ops', state: 'ready', cause: 'stop', ts: 1718000001, wide: true },
   });
 });
 
 test('parsePaneMarks reads four- and five-field markers', () => {
   const out = marksOf('__AGENT__ web:blocked:1718000000:permission', '__AGENT__ dev:ready:1718000001:start:%2', '__AGENT__ old:waiting:1718000002', '__AGENT__ old2:working:1718000003', agentPane('web', '%1'), agentPane('dev', '%2'), agentPane('old', '%3'), agentPane('old2', '%4'));
   expect(out).toEqual({
-    '%1': { session: 'web', state: 'blocked', cause: 'permission', ts: 1718000000 },
+    '%1': { session: 'web', state: 'blocked', cause: 'permission', ts: 1718000000, wide: true },
     '%2': { session: 'dev', state: 'ready', cause: 'start', ts: 1718000001 },
-    '%3': { session: 'old', state: 'ready', cause: 'stop', ts: 1718000002 },
-    '%4': { session: 'old2', state: 'working', cause: 'prompt', ts: 1718000003 },
+    '%3': { session: 'old', state: 'ready', cause: 'stop', ts: 1718000002, wide: true },
+    '%4': { session: 'old2', state: 'working', cause: 'prompt', ts: 1718000003, wide: true },
   });
 });
 
@@ -1215,3 +1215,79 @@ test('checkAgents flags a probe that fell off the saturated shared connection, a
     expect(shells).toContain('zsh');
   });
 }
+
+// --- numbers and names from box output are bounded: a bad row drops, never rewritten -----
+
+test('parseTmuxWindows drops a row whose index is not a plain decimal of at most 6 digits, and keeps its neighbour', () => {
+  const out = [
+    '__WIN__ main:1e30:@1:1:big',
+    '__WIN__ main:1234567:@2:0:seven',
+    '__WIN__ main:+1:@3:0:plus',
+    '__WIN__ main: 1:@4:0:space',
+    '__WIN__ main:1.0:@5:0:dot',
+    '__WIN__ main:0x1:@6:0:hex',
+    '__WIN__ main::@7:0:empty',
+    '__WIN__ main:999999:@8:0:six',
+    '__WIN__ main:2:@9:0:two',
+  ].join('\n');
+  expect(parseTmuxWindows(out).map((w) => [w.id, w.index])).toEqual([['@8', 999999], ['@9', 2]]);
+});
+
+test('parseTmuxPanes drops a row whose pane index is not a plain decimal of at most 6 digits, and keeps its neighbour', () => {
+  const out = [
+    '__PANE__ main:@0:%1:9007199254740991:1:0:claude',
+    '__PANE__ main:@0:%2:1234567:0:0:claude',
+    '__PANE__ main:@0:%3:999999:0:0:claude',
+    '__PANE__ main:@0:%4:1:0:0:claude',
+  ].join('\n');
+  const { panes, complete } = parseTmuxPanes(out);
+  expect(panes.map((p) => [p.pane, p.index])).toEqual([['%3', 999999], ['%4', 1]]);
+  expect(complete).toBe(true);
+});
+
+test('parsePaneMarks drops a marker whose ts is not a positive safe integer, and keeps its neighbour', () => {
+  const rows = ['%1', '%2', '%3', '%4', '%5', '%6'].map((p) => agentPane('web', p));
+  const out = marksOf(
+    '__AGENT__ web:ready:1700000000.5:stop:%1',
+    '__AGENT__ web:ready:9007199254740993:stop:%2',
+    '__AGENT__ web:ready:1e9:stop:%3',
+    '__AGENT__ web:ready:-5:stop:%4',
+    '__AGENT__ web:ready: 1700000000:stop:%5',
+    '__AGENT__ web:ready:1700000000:stop:%6',
+    ...rows,
+  );
+  expect(out).toEqual({ '%6': { session: 'web', state: 'ready', cause: 'stop', ts: 1700000000 } });
+  // The same for a session-wide marker: a fractional ts speaks for nothing.
+  expect(marksOf('__AGENT__ web:ready:1700000000.5:stop', agentPane('web', '%1'))).toBeNull();
+});
+
+test('parsePaneMarks drops a marker whose session name breaks the session-row rules, listed or not', () => {
+  const long = 's'.repeat(SESSION_NAME_MAX + 1);
+  // With no pane listing (fail open) every pane marker is kept, so these reach the result unless the name rule drops them.
+  const unlisted = marksOf(
+    '__AGENT__ we\u0007b:working:1700000000:prompt:%1',
+    '__AGENT__ we‮b:working:1700000000:prompt:%2',
+    `__AGENT__ ${long}:working:1700000000:prompt:%3`,
+    '__AGENT__ we\u0085b:working:1700000000:prompt:%4',
+    `__AGENT__ ${'s'.repeat(SESSION_NAME_MAX)}:working:1700000000:prompt:%5`,
+  );
+  expect(Object.keys(unlisted)).toEqual(['%5']);
+  // A session-wide marker with a control character speaks for nothing, even for a listed pane of that name.
+  expect(marksOf('__AGENT__ we\u0007b:working:1700000000:prompt', '__PANE__ we\u0007b:@0:%1:1:1:0:claude', agentPane('web', '%2'))).toBeNull();
+});
+
+// --- pane rows with no session rows: a contradictory listing is unknown, not empty --------
+
+test('checkBox and checkAgents: pane rows with no session rows carry no panes key; a truly empty box still does', async () => {
+  const checker = (stdout) => createStatusChecker({ run: async () => ({ code: 0, stdout, stderr: '' }) });
+  const contradictory = ['__PANE__ main:@0:%1:0:1:0:claude', '__AGENT__ main:ready:1700000000:stop:%1'].join('\n');
+  for (const probe of ['checkBox', 'checkAgents']) {
+    const s = await checker(contradictory)[probe]({ id: 'b1', host: 'h' });
+    expect(s.sessions, probe).toEqual([]);
+    expect(s, probe).not.toHaveProperty('panes');
+    const empty = await checker('').checkBox({ id: 'b1', host: 'h' });
+    expect(empty.panes, probe).toEqual([]);
+  }
+  // Even a pane row that fails validation contradicts "no sessions".
+  expect(await checker('__PANE__ garbage').checkBox({ host: 'h' })).not.toHaveProperty('panes');
+});

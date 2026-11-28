@@ -255,8 +255,10 @@ test('carries no agents key when sessions are listed but panes are not', () => {
 
 test('an empty session list is an empty map', () => {
   expect(sampleOf({ reachable: true, tmux: false, sessions: [], panes: [] }, 1).agents).toEqual({});
-  // No sessions at all also means no panes, whatever the pane listing said.
-  expect(sampleOf({ reachable: true, tmux: true, sessions: [] }, 1).agents).toEqual({});
+  expect(sampleOf({ reachable: true, tmux: true, sessions: [], panes: [] }, 1).agents).toEqual({});
+  // No sessions but no pane listing either (pane rows with no session rows,
+  // status.js tmuxState): unknown, not empty, so no agents key at all.
+  expect('agents' in sampleOf({ reachable: true, tmux: true, sessions: [] }, 1)).toBe(false);
 });
 
 test('a failed probe carries no agents map at all', () => {
@@ -530,7 +532,7 @@ test('agent-done fires when the agent exits on an up box, and either end on scre
 
 test('stopping then starting a Proxmox box fires no stale agent-done', () => {
   const ready = fromProbe(probeOut(0, 'claude', 'ready:990:stop'));
-  const samples = [ready, { proxmoxState: 'stopped' }, { reachable: true, sessions: [] }].map((x) => sampleOf(x, 5));
+  const samples = [ready, { proxmoxState: 'stopped' }, { reachable: true, sessions: [], panes: [] }].map((x) => sampleOf(x, 5));
   const st = classifyTransitions(null, samples[0], TH, initThresholdState()).state;
   let r = classifyTransitions(samples[0], samples[1], TH, st);
   expect(r.events.map((e) => e.kind)).not.toContain('agent-done');
@@ -541,7 +543,7 @@ test('stopping then starting a Proxmox box fires no stale agent-done', () => {
 test('a plain down -> up keeps the previous map, so an agent gone across a reboot fires agent-done', () => {
   const ready = sampleOf(fromProbe(probeOut(0, 'claude', 'ready:990:stop')), 5);
   const down = sampleOf({ reachable: false }, 5);
-  const back = sampleOf({ reachable: true, sessions: [] }, 5);
+  const back = sampleOf({ reachable: true, sessions: [], panes: [] }, 5);
   const st = classifyTransitions(null, ready, TH, initThresholdState()).state;
   const r = classifyTransitions(ready, down, TH, st);
   expect(classifyTransitions(down, back, TH, r.state).events.map((e) => e.kind)).toEqual(['up', 'agent-done']);
@@ -937,7 +939,7 @@ test('recordAgents leaves the metric thresholds and every other box alone', () =
   const { h, tick } = rtHistory();
   const hot = (m) => ({ ...one(m), metrics: { cpuPct: 99 } });
   const b2 = { id: 'b2', label: 'db-01', host: 'h2' };
-  const cool = { reachable: true, tmux: true, sessions: [], metrics: { cpuPct: 5 } };
+  const cool = { reachable: true, tmux: true, sessions: [], panes: [], metrics: { cpuPct: 5 } };
   h.record({ b1: { ...one(mark('working', 'prompt', 100)), metrics: { cpuPct: 5 } }, b2: cool }, [RT_BOX, b2]);
   tick(30000);
   h.record({ b1: hot(mark('working', 'prompt', 100)), b2: cool }, [RT_BOX, b2]); // first over-sample: no event yet
@@ -990,7 +992,7 @@ test('onChange names a box whenever its agent map changes, from the sweep or the
   const changed = [];
   const off = h.onChange((id) => changed.push(id));
   const b2 = { id: 'b2', label: 'db-01', host: 'h2' };
-  const plain = { reachable: true, tmux: true, sessions: [] };
+  const plain = { reachable: true, tmux: true, sessions: [], panes: [] };
   h.record({ b1: one(mark('working', 'prompt', 100)), b2: plain }, [RT_BOX, b2]);
   expect(changed.sort()).toEqual(['b1', 'b2']);          // first sight of each
   changed.length = 0;
@@ -1150,4 +1152,119 @@ test('recordAgents prunes the watermark of a pane that is gone', () => {
   h.recordAgents(RT_BOX, noPanes);
   expect(store.data).toEqual({ b1: { '%1': 100 } });
   expect(h.getSeries('b1').at(-1).agents['%1'].state).toBe('idle');
+});
+
+// --- a session-wide marker never speaks for a pane that had its own -----------
+//
+// Detached session `main`: Codex in window 1 on a reporter that has not been re-pushed (its
+// state is the session-wide file), Claude in window 2 with its own marker. An exiting Claude
+// removes its own marker while it is still the pane's foreground command, and that removal is
+// what triggers the light probe: in that read the pane has no marker of its own, and the
+// session-wide one must not speak for it.
+const WIDE_BOX = { id: 'b1', label: 'web-01', host: 'h1' };
+const wideProbe = ({ wide = 'main:blocked:90:permission', claudeMark = 'main:working:100:prompt:%2', claudeCmd = 'claude' } = {}) => fromProbe([
+  'main:2:0:1000:codex',
+  '__WIN__ main:1:@1:1:api',
+  '__WIN__ main:2:@2:0:cl',
+  '__PANE__ main:@1:%1:0:1:0:codex',
+  `__PANE__ main:@2:%2:0:1:0:${claudeCmd}`,
+  ...(wide ? [`__AGENT__ ${wide}`] : []),
+  ...(claudeMark ? [`__AGENT__ ${claudeMark}`] : []),
+].join('\n'));
+const agentKinds = (h) => h.getEvents().events.filter((e) => e.kind.startsWith('agent')).reverse().map((e) => [e.kind, e.pane]);
+
+test('the parser marks a session-wide mark it applied, and only that one', () => {
+  const s = wideProbe();
+  expect(s.paneMarks['%1']).toEqual({ session: 'main', state: 'blocked', cause: 'permission', ts: 90, wide: true });
+  expect(s.paneMarks['%2']).toEqual({ session: 'main', state: 'working', cause: 'prompt', ts: 100 });
+});
+
+test('recordAgents: an own marker that goes, with a blocked session-wide marker present, is a gap; the exit is one agent-done', () => {
+  const h = createHealthHistory({ now: () => 5 });
+  h.record({ b1: wideProbe() }, [WIDE_BOX]);
+  expect(h.recordAgents(WIDE_BOX, wideProbe({ claudeMark: null }))).toBe(true);
+  expect(agentKinds(h)).toEqual([]);
+  const entry = h.getSeries('b1').at(-1).agents['%2'];
+  expect(entry).toMatchObject({ agent: 'claude', session: 'main', windowId: '@2' });
+  expect('state' in entry).toBe(false);
+  expect(h.getSeries('b1').at(-1).agents['%1']).toMatchObject({ state: 'blocked', cause: 'permission' });
+  // The next sweep finds Claude's pane back at its shell: the baseline kept `working`.
+  h.record({ b1: wideProbe({ claudeMark: null, claudeCmd: 'zsh' }) }, [WIDE_BOX]);
+  expect(agentKinds(h)).toEqual([['agent-done', '%2']]);
+});
+
+test('recordAgents: the same gap with a ready:stop session-wide marker raises no agent-input', () => {
+  const h = createHealthHistory({ now: () => 5 });
+  const wide = 'main:ready:90:stop';
+  h.record({ b1: wideProbe({ wide }) }, [WIDE_BOX]);
+  expect(h.recordAgents(WIDE_BOX, wideProbe({ wide, claudeMark: null }))).toBe(true);
+  expect(agentKinds(h)).toEqual([]);
+  expect('state' in h.getSeries('b1').at(-1).agents['%2']).toBe(false);
+  h.record({ b1: wideProbe({ wide, claudeMark: null, claudeCmd: 'zsh' }) }, [WIDE_BOX]);
+  expect(agentKinds(h)).toEqual([['agent-done', '%2']]);
+});
+
+test('record: the same gap arriving on the sweep raises no false event', () => {
+  for (const wide of ['main:blocked:90:permission', 'main:ready:90:stop']) {
+    const h = createHealthHistory({ now: () => 5 });
+    h.record({ b1: wideProbe({ wide }) }, [WIDE_BOX]);
+    h.record({ b1: wideProbe({ wide, claudeMark: null }) }, [WIDE_BOX]);
+    expect(agentKinds(h), wide).toEqual([]);
+    expect('state' in h.getSeries('b1').at(-1).agents['%2'], wide).toBe(false);
+    // Still held off while the pane stays in the baseline: another sweep, then a light probe.
+    h.record({ b1: wideProbe({ wide, claudeMark: null }) }, [WIDE_BOX]);
+    h.recordAgents(WIDE_BOX, wideProbe({ wide, claudeMark: null }));
+    expect(agentKinds(h), wide).toEqual([]);
+    expect('state' in h.getSeries('b1').at(-1).agents['%2'], wide).toBe(false);
+  }
+});
+
+test('a pane that never had its own marker follows the session-wide one, edges included, on both paths', () => {
+  const h = createHealthHistory({ now: () => 5 });
+  h.record({ b1: wideProbe({ wide: 'main:working:80:prompt' }) }, [WIDE_BOX]);
+  h.recordAgents(WIDE_BOX, wideProbe({ wide: 'main:blocked:90:permission' }));
+  expect(agentKinds(h)).toEqual([['agent-blocked', '%1']]);
+  expect(h.getSeries('b1').at(-1).agents['%1']).toMatchObject({ state: 'blocked', cause: 'permission', ts: 90 });
+  h.record({ b1: wideProbe({ wide: 'main:ready:95:stop' }) }, [WIDE_BOX]);
+  expect(agentKinds(h)).toEqual([['agent-blocked', '%1'], ['agent-input', '%1']]);
+  // A pane that has only ever been spoken for by the session-wide marker keeps following it
+  // through a gap of its own pane neighbour.
+  h.recordAgents(WIDE_BOX, wideProbe({ wide: 'main:blocked:99:question', claudeMark: null }));
+  expect(agentKinds(h)).toEqual([['agent-blocked', '%1'], ['agent-input', '%1'], ['agent-blocked', '%1']]);
+  // And a pane that leaves (back at its shell) and comes back with no marker of its own is
+  // spoken for again: the memory ends with the pane's baseline entry.
+  const h2 = createHealthHistory({ now: () => 5 });
+  h2.record({ b1: wideProbe({ wide: 'main:working:80:prompt' }) }, [WIDE_BOX]);
+  h2.record({ b1: wideProbe({ wide: 'main:working:80:prompt', claudeMark: null, claudeCmd: 'zsh' }) }, [WIDE_BOX]);
+  expect(agentKinds(h2)).toEqual([['agent-done', '%2']]);
+  h2.record({ b1: wideProbe({ wide: 'main:working:81:prompt', claudeMark: null }) }, [WIDE_BOX]);
+  expect(h2.getSeries('b1').at(-1).agents['%2']).toMatchObject({ state: 'working', ts: 81 });
+  h2.recordAgents(WIDE_BOX, wideProbe({ wide: 'main:blocked:82:permission', claudeMark: null }));
+  expect(agentKinds(h2)).toEqual([['agent-done', '%2'], ['agent-blocked', '%1'], ['agent-blocked', '%2']]);
+});
+
+test('an own marker returning after the gap edges from the kept baseline', () => {
+  const h = createHealthHistory({ now: () => 5 });
+  h.record({ b1: wideProbe() }, [WIDE_BOX]);
+  h.recordAgents(WIDE_BOX, wideProbe({ claudeMark: null }));
+  h.recordAgents(WIDE_BOX, wideProbe({ claudeMark: 'main:ready:110:stop:%2' }));
+  expect(agentKinds(h)).toEqual([['agent-input', '%2']]);
+  expect(h.getSeries('b1').at(-1).agents['%2']).toMatchObject({ state: 'done', ts: 110 });
+  // From blocked too, on the sweep.
+  const h2 = createHealthHistory({ now: () => 5 });
+  h2.record({ b1: wideProbe({ wide: 'main:ready:90:stop' }) }, [WIDE_BOX]);
+  h2.recordAgents(WIDE_BOX, wideProbe({ wide: 'main:ready:90:stop', claudeMark: null }));
+  h2.record({ b1: wideProbe({ wide: 'main:ready:90:stop', claudeMark: 'main:blocked:120:permission:%2' }) }, [WIDE_BOX]);
+  expect(agentKinds(h2)).toEqual([['agent-blocked', '%2']]);
+});
+
+test('the sample entry carries no provenance field, from a session-wide mark or an own one', () => {
+  const h = createHealthHistory({ now: () => 5 });
+  h.record({ b1: wideProbe() }, [WIDE_BOX]);
+  const keys = ['session', 'windowId', 'windowIndex', 'windowName', 'paneIndex', 'agent', 'state', 'cause', 'ts', 'visible', 'focused', 'attached'];
+  const agents = h.getSeries('b1').at(-1).agents;
+  expect(Object.keys(agents['%1'])).toEqual(keys);
+  expect(Object.keys(agents['%2'])).toEqual(keys);
+  expect(JSON.stringify(h.getSeries('b1'))).not.toContain('wide');
+  expect(Object.keys(sampleOf(wideProbe(), 1).agents['%1'])).toEqual(keys);
 });

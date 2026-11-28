@@ -52,10 +52,12 @@ beforeEach(async () => {
       if (probeThrows) throw new Error('probe blew up');
       return { reachable: true };
     },
-    refreshAgents: async (id) => {
+    // Not async, so each variant reaches the route as itself: a plain false, a synchronous
+    // throw, a rejection.
+    refreshAgents: (id) => {
       refreshed.push(id);
       order.push({ call: 'refreshAgents', id, scriptsSoFar: calls.length });
-      return refreshImpl ? refreshImpl(id) : true;
+      return refreshImpl ? refreshImpl(id) : Promise.resolve(true);
     },
   };
   serverArgs = { config, store, sessions, statusChecker, statusPoller, boxActions, setupManager };
@@ -290,11 +292,12 @@ test('POST window still answers ok when the refresh resolves false, throws synch
 test('POST window answers ok from a poller that has probeOne but no refreshAgents', async () => {
   const probeOnly = buildServer({ ...serverArgs, statusPoller: { getSnapshot: () => ({}), probeOne: async (id) => { probed.push(id); return { reachable: true }; } } });
   const h = await headers(probeOnly);
-  const res = await app.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'web', windowId: '@2' } });
-  expect(res.statusCode).toBe(200);
+  const res = await probeOnly.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'web', windowId: '@2' } });
+  expect([res.statusCode, res.json()]).toEqual([200, { ok: true, windowId: '@2' }]);
   const probeOnlyRes = await probeOnly.inject({ method: 'POST', url: winUrl(), headers: h, payload: { session: 'web', windowId: '@2', paneId: '%5' } });
   expect([probeOnlyRes.statusCode, probeOnlyRes.json()]).toEqual([200, { ok: true, windowId: '@2', paneId: '%5' }]);
   expect(probed).toEqual([boxId, boxId]); // the probe still ran: the missing refresh took nothing else with it
+  expect(refreshed).toEqual([]); // and this app never reached the harness poller's refresh
 });
 
 test('POST window never refreshes the agents after a refused or failed select', async () => {

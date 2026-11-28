@@ -171,8 +171,11 @@ function liveKeys({ panes, complete }) {
 
 // One `__AGENT__ <marker contents>` line as { session, state, cause, ts, pane },
 // or null when it is not a usable marker. Marker content is a file on the box,
-// so it is input: state and cause are closed allowlists and ts must be a finite
-// positive number; anything else drops (never rewritten). Five fields is the
+// so it is input: the session passes the session-row name rules (no control or
+// bidi characters, at most SESSION_NAME_MAX), state and cause are closed
+// allowlists and ts must be a positive safe integer written as plain digits
+// (an acknowledgement posts it back, and the route takes only a safe integer);
+// anything else drops (never rewritten). Five fields is the
 // Claude hook's per-pane format (`...:<cause>:%<pane>`), and `pane` is then its
 // validated id. Four fields is a session-wide marker (`pane` null): the OpenCode
 // plugin and OSC reporter, or the Claude hook without a usable $TMUX_PANE. Three
@@ -187,7 +190,7 @@ function readMarkerLine(line) {
   if (parts.length < 3 || parts.length > 5) return null;
   const [session, rawState, tsRaw, rawCause, pane] = parts;
   const ts = Number(tsRaw);
-  if (!session || !Number.isFinite(ts) || ts <= 0) return null;
+  if (!sessionNameOk(session) || !DIGITS_RE.test(tsRaw) || !Number.isSafeInteger(ts) || ts <= 0) return null;
   let state;
   let cause;
   if (parts.length === 3) {
@@ -217,9 +220,16 @@ function readMarkerLine(line) {
 // A session-wide marker (four fields, or the legacy three) is the compatibility
 // layer for boxes whose setup has not been rerun and for a Claude hook with no
 // usable $TMUX_PANE. It speaks for every agent pane of its session that has no
-// marker of its own, an agent pane being one `agentKindOf` knows by its command.
-// With no trustworthy listing there are no known panes to speak for, so it
-// applies to nothing. Delete this paragraph's rule once every box has been rerun.
+// marker of its own in this read, an agent pane being one `agentKindOf` knows by
+// its command; a pane whose only five-field file names a session that does not
+// list it (a moved pane's leftover, or a reused pane id's) has none. An entry it
+// filled carries `wide: true`, so the health history can refuse it for a pane
+// whose state last came from its own marker (healthHistory.js, `ownMarked`): an
+// exiting agent removes its own marker while it is still the foreground command,
+// and that read must be a gap, not the session-wide state. Agent mail reads the
+// entry like any other. With no trustworthy listing there are no known panes to
+// speak for, so it applies to nothing. Delete this paragraph's rule once every
+// box has been rerun.
 //
 // Null-prototype (a session or pane key is box output, so `__proto__` must land
 // as an own key, never reassign the prototype) and null when empty.
@@ -244,7 +254,7 @@ export function parsePaneMarks(stdout) {
       const mark = wide.get(p.session);
       if (!mark || own.has(p.pane) || agentKindOf(p.cmd) === null) continue;
       // A pane listed in two grouped sessions can be spoken for by both.
-      if (!applied.has(p.pane) || mark.ts > applied.get(p.pane).ts) applied.set(p.pane, { ...mark });
+      if (!applied.has(p.pane) || mark.ts > applied.get(p.pane).ts) applied.set(p.pane, { ...mark, wide: true });
     }
   }
   const out = Object.create(null);
@@ -310,7 +320,9 @@ const cleanWindowName = (s) => s.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u206
 const noTmux = (stdout) => String(stdout).split(/\r?\n/).some((l) => l.trim() === '__NO_TMUX__');
 
 // Pull `__WIN__ <session>:<index>:<id>:<active>:<name>` lines into flat rows.
-// Every field is allowlisted rather than trusted: a bad id, a non-numeric index
+// Every field is allowlisted rather than trusted: a bad id, an index that is not
+// a plain decimal of at most 6 digits (INDEX_RE: every client decodes it as a
+// 32-bit int, and one huge number must not break a whole box's listing there)
 // or an active flag that is not 0/1 drops that row instead of the whole probe.
 export function parseTmuxWindows(stdout) {
   const out = [];
@@ -319,9 +331,9 @@ export function parseTmuxWindows(stdout) {
     const parts = line.slice('__WIN__ '.length).split(':');
     if (parts.length < 5) continue;
     const [session, indexRaw, id, activeRaw] = parts;
-    const index = Number(indexRaw);
     if (!session || !WINDOW_ID_RE.test(id)) continue;
-    if (!Number.isInteger(index) || index < 0) continue;
+    if (!INDEX_RE.test(indexRaw)) continue;
+    const index = Number(indexRaw);
     if (activeRaw !== '0' && activeRaw !== '1') continue;
     out.push({ session, index, id, active: activeRaw === '1', name: cleanWindowName(parts.slice(4).join(':')) });
   }
@@ -353,6 +365,14 @@ export const SESSION_NAME_MAX = 256;
 export const SESSION_ROWS_MAX = 200;
 const UNSAFE_NAME_RE = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/;
 const DIGITS_RE = /^\d+$/;
+// A window or pane index: tmux counts them from 0 or 1 upward, so six digits is
+// far beyond any real box and well inside every client's integer type.
+const INDEX_RE = /^\d{1,6}$/;
+// The session-row name rules, shared by every place a session name is read from
+// box output (session rows, pane rows, markers).
+function sessionNameOk(name) {
+  return !!name && name.length <= SESSION_NAME_MAX && !UNSAFE_NAME_RE.test(name);
+}
 
 export function parseTmuxSessions(stdout) {
   const out = [];
@@ -363,7 +383,7 @@ export function parseTmuxSessions(stdout) {
     // silently drop its row.
     if (!line.trim() || line.trim() === '__NO_TMUX__' || line.startsWith('__META__') || line.startsWith('__AGENT__') || line.startsWith('__WIN__') || line.startsWith('__PANE__')) continue;
     const [name, windows, attached, activity, paneCmd] = line.split(':');
-    if (!name || name.length > SESSION_NAME_MAX || UNSAFE_NAME_RE.test(name)) continue;
+    if (!sessionNameOk(name)) continue;
     if (!DIGITS_RE.test(windows || '') || !DIGITS_RE.test(attached || '') || !/^\d*$/.test(activity ?? '')) continue;
     out.push({ name, windows: Number(windows), attached: Number(attached) > 0, activity: Number(activity), paneCmd: cleanWindowName(paneCmd || '') });
   }
@@ -373,7 +393,7 @@ export function parseTmuxSessions(stdout) {
 // Pull `__PANE__ <session>:<window id>:<pane id>:<index>:<active>:<zoomed>:<cmd>`
 // lines into flat rows. Every field is allowlisted, and a row that fails drops
 // alone (parseTmuxWindows' posture): the session by the session-row name rules,
-// the ids by WINDOW_ID_RE and PANE_ID_RE, the index as plain digits, both flags
+// the ids by WINDOW_ID_RE and PANE_ID_RE, the index by INDEX_RE, both flags
 // as exactly 0 or 1. The command is last because it may hold colons, and is
 // cleaned like a window name. `complete` says whether the listing can be taken
 // as every pane on the box: false with no rows and at the row cap, where `head`
@@ -388,9 +408,9 @@ export function parseTmuxPanes(stdout) {
     const parts = line.slice('__PANE__ '.length).split(':');
     if (parts.length < 7) continue;
     const [session, windowId, pane, indexRaw, activeRaw, zoomedRaw] = parts;
-    if (!session || session.length > SESSION_NAME_MAX || UNSAFE_NAME_RE.test(session)) continue;
+    if (!sessionNameOk(session)) continue;
     if (!WINDOW_ID_RE.test(windowId) || !PANE_ID_RE.test(pane)) continue;
-    if (!DIGITS_RE.test(indexRaw) || !Number.isSafeInteger(Number(indexRaw))) continue;
+    if (!INDEX_RE.test(indexRaw)) continue;
     if ((activeRaw !== '0' && activeRaw !== '1') || (zoomedRaw !== '0' && zoomedRaw !== '1')) continue;
     panes.push({
       session, windowId, pane, index: Number(indexRaw),
@@ -403,13 +423,17 @@ export function parseTmuxPanes(stdout) {
 
 // The tmux half of a probe result, shared by the sweep's probe and checkAgents:
 // whether tmux is there, its sessions (with their windows nested) and its panes.
-// No sessions means no panes, so a box with nothing running reads as an empty
-// listing; otherwise `panes` is present only when the listing is complete, and
-// its absence means the panes could not be read this time.
+// No session rows and no pane rows is a box with nothing running: an empty
+// listing. Pane rows with no session rows contradict each other (a session row
+// that failed its shape check, a listing torn between the calls), so `panes` is
+// left out, the "could not be read" shape, and nothing is judged from it.
+// Otherwise `panes` is present only when the listing is complete, and its
+// absence means the panes could not be read this time.
+const hasPaneRows = (stdout) => String(stdout).split(/\r?\n/).some((l) => l.startsWith('__PANE__ '));
 function tmuxState(stdout) {
   if (noTmux(stdout)) return { tmux: false, sessions: [], panes: [] };
   const sessions = attachWindows(parseTmuxSessions(stdout), parseTmuxWindows(stdout));
-  if (!sessions.length) return { tmux: true, sessions, panes: [] };
+  if (!sessions.length) return hasPaneRows(stdout) ? { tmux: true, sessions } : { tmux: true, sessions, panes: [] };
   const { panes, complete } = parseTmuxPanes(stdout);
   return complete ? { tmux: true, sessions, panes } : { tmux: true, sessions };
 }

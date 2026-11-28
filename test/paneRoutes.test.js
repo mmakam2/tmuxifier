@@ -353,17 +353,27 @@ test('GET pane with ?pane from a device token is 403; without it the device read
   expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane`, headers: b })).statusCode).toBe(200);
 });
 
-test('GET pane: ?session is no longer special, the configured session is captured', async () => {
+// `session` was this route's browser preview parameter until previews named a pane. A stale tab
+// or an old script still sending it must not silently get the configured session's screen.
+test('GET pane with ?session is 400 naming pane for a browser session, 403 for a device token, and runs nothing', async () => {
   const h = await headers();
-  const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=work&lines=40`, headers: h });
-  expect(res.statusCode).toBe(200);
-  expect(res.json()).toMatchObject({ sessionName: 'main', pane: '%1', agent: 'blocked' });
-  expect(calls.at(-1).at(-1)).toContain("capture-pane -e -p -t '=main:' -S -40");
-  // Not validated either: it is not read at all, so a device token and a bad name both just get the default capture.
+  for (const q of ['session=work&lines=40', `session=${encodeURIComponent('bad name')}`, 'session=', 'session=work&pane=%2512']) {
+    const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?${q}`, headers: h });
+    expect(res.statusCode, q).toBe(400);
+    expect(res.json(), q).toEqual({ error: 'the session parameter is gone: name a pane with pane=%N' });
+  }
+  // A device token gets what it always got for `session`: 403, before anything is validated.
   const b = await bearer();
-  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=work`, headers: b })).statusCode).toBe(200);
-  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?session=${encodeURIComponent('bad name')}`, headers: h })).statusCode).toBe(200);
-  expect(calls.every((a) => a.at(-1).includes("'=main:'"))).toBe(true);
+  for (const q of ['session=work', 'session=work&pane=%2512', `session=${encodeURIComponent('bad name')}`]) {
+    const res = await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?${q}`, headers: b });
+    expect([res.statusCode, res.json()], q).toEqual([403, { error: 'browser session required' }]);
+  }
+  expect(calls.length).toBe(0);
+  // An unknown box is still 404 first.
+  expect((await app.inject({ method: 'GET', url: '/api/boxes/nope/pane?session=work', headers: h })).statusCode).toBe(404);
+  // Without it, both reads work as before.
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?lines=40`, headers: h })).statusCode).toBe(200);
+  expect((await app.inject({ method: 'GET', url: `/api/boxes/${boxId}/pane?lines=40&cols=48&rows=20`, headers: b })).statusCode).toBe(200);
 });
 
 test('GET pane with ?pane ignores cols/rows: the switcher never sizes anything', async () => {
